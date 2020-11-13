@@ -978,20 +978,32 @@ plot_outliers <- function(data, col_in,
 }
 
 plot_spc <- function(data, col_in = "all", treatment = NULL,
-                     facets = "meas_date",
+                     facets = NULL,
                      mark_outliers = FALSE){
-  
+
   print("plotting spectra ...")
   
   if("all" %in% col_in){
     col_in <- grep("^rflt_", names(data), value = TRUE)
   }
   
+  # factorise and rename structuring variables
+  if(!is.null(treatment)){
+    data[[treatment]] <- as.factor(data[[treatment]])
+    data <- dplyr::rename(data, "Treatment" = treatment)
+  }
+  if(!is.null(facets)){
+    data[[facets]] <- as.factor(data[[facets]])
+    data <- dplyr::rename(data, "group" = facets)
+  } else{
+    group <- NULL
+  }
+  
   # iterate over data types
   for (colunm in col_in) {
     
     # reshape data for plotting
-    pd <- data %>% dplyr::select(meas_id, meas_date, treatment, colunm) %>% unnest(c(colunm)) %>% 
+    pd <- data %>% dplyr::select(meas_id, group, treatment, colunm) %>% unnest(c(colunm)) %>% 
       tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
       mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
       add_spc_range()
@@ -1003,25 +1015,46 @@ plot_spc <- function(data, col_in = "all", treatment = NULL,
       # geom_abline(intercept = 0, slope = 0) +
       theme_bw() + 
       theme(panel.grid = element_blank())
-    
+  
     # add spectra
     if(!is.null(treatment)){
-      # factorise
-      pd[[treatment]] <- as.factor(pd[[treatment]])
-      # rename treatment column 
-      colnames(pd[treatment]) <- "Treatment"
-      plot <- plot +
-        geom_line(data = pd, aes(x = wvlt, y = rflt,  group = interaction(meas_id, spc_range), col = Treatment), size = 0.05, alpha = 0.25) +
-        scale_color_brewer(palette = "YlGnBu")
-    } else {
-      plot <- plot + 
+      
+      plotf <- plot +
+        geom_line(data = pd, aes(x = wvlt, y = rflt,  group = interaction(meas_id, spc_range),
+                                 col = Treatment), size = 0.05, alpha = 0.25) +
+        ggsci::scale_color_npg()
+        
+      # calculate mean and sd of reflectance
+      if(!is.null(facets)){
+        pdmeans <- pd %>% group_by(Treatment, group, wvlt, spc_range)
+      } else{
+        pdmeans <- pd %>% group_by(Treatment, wvlt, spc_range)
+      }
+      pdmeans <- pdmeans %>% 
+        dplyr::summarise(mean_rflt = mean(rflt, na.rm = T),
+                         sd_rflt = sd(rflt, na.rm = T))
+      
+      # plot mean and sd per treatment and group
+      plotmeans <- plot +
+        geom_line(data = pdmeans, aes(x = wvlt, y = mean_rflt,  group = interaction(Treatment, spc_range),
+                                 col = Treatment), size = 1, alpha = 1) +
+        geom_ribbon(data=pdmeans, aes(x = wvlt, ymin = mean_rflt - sd_rflt, 
+                                      ymax = mean_rflt + sd_rflt, 
+                                      fill = Treatment, 
+                                      group = interaction(Treatment, spc_range)), alpha = 0.25) +
+        ggsci::scale_color_npg() +
+        ggsci::scale_fill_npg()
+      } else {
+      plotf <- plot + 
         geom_line(data = pd, aes(x = wvlt, y = rflt,  group = interaction(meas_id, spc_range)), size = 0.05, alpha = 0.25)
     }
     
     # add facets
     if(!is.null(facets)){
-      plot <- plot +
-        facet_wrap(as.formula(paste0("~", facets)), ncol = 1, scales = "free")
+      plotf <- plotf +
+        facet_wrap(~group, ncol = 1, scales = "free")
+      plotmeans <- plotmeans +
+        facet_wrap(~group, ncol = 1, scales = "free")
     }
     
     # mark outliers
@@ -1032,13 +1065,13 @@ plot_spc <- function(data, col_in = "all", treatment = NULL,
         print("marking outliers ...")
         
         # reshape data for plotting
-        pd_out <- data %>% dplyr::select(meas_id, meas_date, treatment, colunm, otype) %>% unnest(c(colunm)) %>% 
+        pd_out <- data %>% dplyr::select(meas_id, group, treatment, colunm, otype) %>% unnest(c(colunm)) %>% 
           tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
           mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
           add_spc_range()
         
         # mark outliers
-        plot <- plot +
+        plotf <- plotf +
           geom_line(data = pd_out[pd_out[otype] == 1,], aes(x = wvlt, y = rflt, group = interaction(meas_id, spc_range)),
                     size = 0.05, alpha = 1, col = "darkred", lty = "dashed")
         
@@ -1054,15 +1087,21 @@ plot_spc <- function(data, col_in = "all", treatment = NULL,
     }
     
     # save plot to pdf
-    levels = nrow(unique(pd[facets]))
+    # individual spectra
+    levels = nrow(unique(pd["group"]))
     width = 10
     pdf(paste0("Output/spectra_trt_", colunm,".pdf"), width = width, height = width * (levels/2))
     # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
-    plot(plot)
+    plot(plotf)
+    dev.off()
+    # spectra means
+    pdf(paste0("Output/spectra_means_", colunm,".pdf"), width = width, height = width * (levels/2))
+    # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
+    plot(plotmeans)
     dev.off()
     
   }
-  
+
 }
 
 revert <- function(x){10 - x}
