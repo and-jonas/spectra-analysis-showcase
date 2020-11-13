@@ -15,14 +15,13 @@ library(mvoutlier)
 library(prospectr)
 
 # set working directory
-basedir <- "O:/Projects/KP0011/8/Spectral_Data"
-setwd(basedir)
+basedir <- "O:/Projects/KP0011/8/"
 
 # load functions
-source("spectra_processors.R")
+source(paste0(basedir, "spectra-analysis-showcase/spectra_proc.R"))
 
 # load all spectral data
-data <- load_spectra(format = "sed")
+data <- load_spectra(dir = paste0(basedir, "Spectral_Data/"), format = "sed")
 saveRDS(data, "alldat_list.rds")
 
 # ============================================================================================================= -

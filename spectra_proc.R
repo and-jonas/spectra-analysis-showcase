@@ -3,11 +3,19 @@
 
 # main functions ----
 
-# function to load all spectral data contained in dir
-load_spectra <- function(format = "sed"){
+#' Loads spectra files from working directory
+#' @param dir Directory to read files from
+#' @param format file extension as a character string, "sed" or "asd"
+#' @return A tibble with measurement_id, measurement date and spectra in a list column of data.tables
+#' @details Files tp read must be stored in subfolders with measurement dates as folder names, e.g. "20200709"
+#' File names must start with a four digit number indicating the year of measurement 
+#' and finish with the specified file extension, i.e. ".sed" or ".asd". 
+#' All files meeting these criteria are read. 
+#' @export
+load_spectra <- function(dir, format = "sed"){
   print("loading spetra ...")
   # get all subdirectories
-  subdirs <- dir(full.names = TRUE, recursive = FALSE, pattern = "^[0-9]{8}")
+  subdirs <- dir(path = dir, full.names = TRUE, recursive = FALSE, pattern = "^[0-9]{8}")
   # get all filenames
   dirs_spc_files <- list.files(subdirs, pattern = paste0("^[0-9]{4}.*", ".", format), full.names = TRUE)
   # load spectral data
@@ -20,7 +28,18 @@ load_spectra <- function(format = "sed"){
   return(data)
 }
 
-# smooth spectra and calculate derivatives
+#' Pre-processes spectra 
+#' @param data A tibble with spectra in list columns of data.tables, as returned by "load_spectra()".  
+#' @param p Order of the polynomial used for smoothing of spectra, defaults to p = 3
+#' @param w Window size in wavebands, defaults to w = 21
+#' @param m Order of the derivative calculated, defaults to m = 0, i.e. original spectra
+#' @param col_in Column of the tibble to which the pre-processing is applied, defaults to "rflt", i.e. raw reflectance spectra
+#' @param new_col Boolean, whether to add output as a new list column or overwrite the input column
+#' @param snv Boolean, whether to calculate the standard normal variate or not
+#' @param trim A numeric vector specifying the lower and upper bounds of spectral regions to exclude, or NULL 
+#' @param binning numeric or NULL, specifying the bin width
+#' @return The modified input tibble, with THE overwritten or added output in a list column
+#' @export
 preprocess_spc <- function(data,
                            p = 3, w = 21, m = 0, 
                            col_in = "rflt", 
@@ -28,11 +47,6 @@ preprocess_spc <- function(data,
                            snv = FALSE,
                            trim = c(1350, 1475, 1781, 1990, 2400, 2500),
                            binning = 3){
-  
-  # data: a data frame
-  # p: polynomial order (prospectr::savitzkyGolay)
-  # m: differentiation order (prospectr::savitzkyGolay)
-  # w: window size (must be odd) (prospectr::savitzkyGolay)
   
   print("pre-processing spectra ...")
   
@@ -89,7 +103,16 @@ preprocess_spc <- function(data,
   
 }
 
-# find outlier spectra
+#' Detects multivariate outliers in spectral datasets 
+#' @param data A tibble with spectra in list columns of data.tables, as returned by "load_spectra()" and "preprocess_spc". 
+#' @param col_in Column of the tibble to which the pre-processing is applied, defaults to "all", 
+#' i.e. using all types of spectra contained in list columns of the tibble
+#' @param grouping A character vector or NULL, specifying the structure of the spectral dataset. 
+#' If a grouping variable is supplied, outliers are detected within each group
+#' @param outliers_rm Character vector or NULL, specifying which type of outliers should be removed (i.e. which of the col_in).
+#' If "all", all samples detected as an outlier in any of the col_in will be removed from the dataset
+#' @param create_plot Boolean, whether the outliers should be plotted
+#' @return A tibble with list columns, 
 detect_outlier_spectra <- function(data, col_in = "all",
                                    grouping = NULL,
                                    outliers_rm = NULL,
@@ -159,7 +182,12 @@ detect_outlier_spectra <- function(data, col_in = "all",
   
 }
 
-#compute spectral indices
+#' Calculates spectral vegetation indices
+#' @param data A tibble with spectra in list columns of data.tables, as returned by "load_spectra()" and "preprocess_spc"
+#' @param col_in Column of the tibble to containing the spectra to use
+#' @param new_col Boolean, whether to add output as a new list column or overwrite the input column
+#' @return A tibble with list columns
+#' @export
 calculate_SVI <- function(data, col_in, new_col = T) {
   
   print("calculating spectral indices ...")
@@ -796,7 +824,13 @@ calculate_SVI <- function(data, col_in, new_col = T) {
   
 }
 
-# scale spectral indices (date-wise, level = plot)
+#' Sclaes spectral indices to range from 0 to 10 
+#' representing the minimum and maximum value observed in a time series of measurements
+#' @param data A tibble with SVI values in a list column of data.tables, as returned by "calculate_SVI"
+#' @param plotid The variable name of the plot identifier
+#' @return A tibble with list columns
+#' @details This function reverts the scale for SVI with an increase during the measurement period
+#' @export
 scale_SVI <- function(data, plotid = "Plot_ID") {
   
   # extract SVI from list column and add required metadata
@@ -847,6 +881,11 @@ scale_SVI <- function(data, plotid = "Plot_ID") {
 
 # helper functions ---- 
 
+#' Read an individual spectrum from an .sed or an .asd file
+#' @param dir full file name
+#' @param format file extension as a character string, "sed" or "asd"
+#' @return A tibble with measurement_id, measurement date and the spectrum in a data.table
+#' @export
 read_spectrum <- function(dir, format = "sed"){
   if(format == "sed"){
     # read file 
