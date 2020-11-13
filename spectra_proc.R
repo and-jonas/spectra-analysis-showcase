@@ -872,7 +872,7 @@ scale_SVI <- function(data, plotid = "Plot_ID") {
   ids[, "SVI_sc"] <- list(spc_pre_list)
   
   # join with spectral data
-  data_out <- full_join(SVI, ids, by = c("Plot_ID", "meas_date"))
+  data_out <- full_join(data, ids, by = c("Plot_ID", "meas_date"))
   
 } 
 

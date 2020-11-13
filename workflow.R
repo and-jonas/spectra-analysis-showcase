@@ -45,9 +45,9 @@ spc_pp <- data %>%
 # detect multivariate outliers, plot and exclude from db
 spc_pp_o <- spc_pp %>% 
   detect_outlier_spectra(grouping = "meas_date", 
-                         outliers_rm= c("rflt_p3w21m0_trim_bin3", "rflt_p3w21m1_trim_bin3"),
+                         # outliers_rm= c("rflt_p3w21m0_trim_bin3", "rflt_p3w21m1_trim_bin3"),
                          outliers_rm = NULL, # if outliers are to be plotted later
-                         create_plot = T)
+                         create_plot = F)
 
 # add measurement meta data
 meta <- read_csv("spectral_files_fusarium_asign.csv")
