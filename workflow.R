@@ -5,14 +5,15 @@ rm(list = ls())
 
 .libPaths("T:/R3UserLibs")
 
-list.of.packages <- c("tidyverse", "mvoutlier", "data.table", "prospectr")
+list.of.packages <- c("tidyverse", "mvoutlier", "data.table", "prospectr", "ggsci")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-if(length(new.packages)) install.packages(new.packages, dependencies = TRUE, repos='https://stat.ethz.ch/CRAN/')
+if(length(new.packages)) install.packages(new.packages, dependencies = TRUE, repos = 'https://stat.ethz.ch/CRAN/')
 
 library(tidyverse)
 library(data.table)
 library(mvoutlier)
 library(prospectr)
+library(ggsci)
 
 # set working directory
 basedir <- "O:/Projects/KP0011/8/"
@@ -20,14 +21,14 @@ basedir <- "O:/Projects/KP0011/8/"
 # load functions
 source(paste0(basedir, "spectra-analysis-showcase/spectra_proc.R"))
 
-# load all spectral data
-data <- load_spectra(dir = paste0(basedir, "Spectral_Data/"), format = "sed")
-saveRDS(data, "alldat_list.rds")
+# # load all spectral data
+# data <- load_spectra(dir = paste0(basedir, "Spectral_Data/"), format = "sed")
+# saveRDS(data, paste0(basedir, "Spectral_Data/alldat_list.rds"))
 
 # ============================================================================================================= -
 
 # load spectral data
-data <- readRDS("alldat_list.rds")
+data <- readRDS(paste0(basedir, "Spectral_Data/alldat_list.rds"))
 
 # pre-process spectra
 spc_pp <- data %>% 
@@ -44,13 +45,13 @@ spc_pp <- data %>%
 
 # detect multivariate outliers, plot and exclude from db
 spc_pp_o <- spc_pp %>% 
-  detect_outlier_spectra(grouping = "meas_date", 
+  detect_outlier_spectra(grouping = NULL, 
                          # outliers_rm= c("rflt_p3w21m0_trim_bin3", "rflt_p3w21m1_trim_bin3"),
-                         outliers_rm = NULL, # if outliers are to be plotted later
-                         create_plot = F)
+                         outliers_rm = "rflt_p3w21m0_trim_bin3", 
+                         create_plot = T)
 
 # add measurement meta data
-meta <- read_csv("spectral_files_fusarium_asign.csv")
+meta <- read_csv(paste0(basedir, "Spectral_Data/spectral_files_fusarium_asign.csv"))
 dd <- right_join(meta, spc_pp_o[[1]], by = c("sed_new" = "meas_id")) %>% 
   dplyr::rename("meas_id" = "sed_new")
 
@@ -68,9 +69,21 @@ dd <- right_join(meta, spc_pp, by = c("sed_new" = "meas_id")) %>%
 SVI <- calculate_SVI(data = dd, col_in = "rflt_p3w21m0") %>% 
   scale_SVI()
 
+saveRDS(SVI, paste0(basedir, "Spectral_Data/spc_pp.rds"))
+
 # ============================================================================================================= -
 # ============================================================================================================= -
 # ============================================================================================================= -
 
+
+
+
+# ============================================================================================================= -
+
+sub <- SVI %>% 
+  dplyr::select(1:meas_date, rflt_p3w21m0_snv_trim_bin3) %>% 
+  mutate(meas_date = as.Date(meas_date, "%Y%m%d"))
+mindate <- as.Date(min(sub$meas_date))
+sub$dafm <- as.numeric(sub$meas_date - mindate)
 
 

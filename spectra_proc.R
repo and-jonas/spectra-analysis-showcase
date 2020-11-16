@@ -804,7 +804,7 @@ calculate_SVI <- function(data, col_in, new_col = T) {
   
   # CREATE TIBBLE ########################################################################## -
   
-  DF <- do.call(cbind.data.frame, mget(ls(pattern = "SI_"))) %>% tibble::as.tibble()
+  DF <- do.call(cbind.data.frame, mget(ls(pattern = "SI_"))) %>% tibble::as_tibble()
   
   # convert to list of data.tables
   svi <- data.table::as.data.table(DF)
@@ -831,10 +831,10 @@ calculate_SVI <- function(data, col_in, new_col = T) {
 #' @return A tibble with list columns
 #' @details This function reverts the scale for SVI with an increase during the measurement period
 #' @export
-scale_SVI <- function(data, plotid = "Plot_ID") {
+scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
   
   # extract SVI from list column and add required metadata
-  meta <- data[c(plotid, "meas_date")]
+  meta <- data[c(plotid, "meas_date", "Treatment")]
   SVI_dat <- data.table::rbindlist(data[["SVI"]])
   d <- cbind(meta, SVI_dat)
   
@@ -860,7 +860,7 @@ scale_SVI <- function(data, plotid = "Plot_ID") {
     unnest(cols = c(SVI_sc))
   
   # revert scale where required
-  ids <- d_scaled[c("Plot_ID", "meas_date")] %>% ungroup()
+  ids <- d_scaled[c("Plot_ID", "meas_date", "Treatment")] %>% ungroup()
   SVI_sc_dat <- d_scaled[grepl("^SI_", names(d_scaled))]
   SVI_sc_dat <- SVI_sc_dat %>% 
     mutate_all(funs(r = revert)) %>% 
@@ -868,10 +868,38 @@ scale_SVI <- function(data, plotid = "Plot_ID") {
     dplyr::select_if(function(col) col[1] > 5) %>% 
     data.table::as.data.table()
   
+  if(plot){
+    
+    # reshape data for plotting
+    pd <- cbind(ids, SVI_sc_dat)
+    # transform measurement date in days after first measurement
+    # this should be replaced by a measure of chronological or thermal time after heading
+    pd$dafm <- as.numeric(as.Date(pd$meas_date, "%Y%m%d") - as.Date(min_date, "%Y%m%d"))
+    pd <- pd %>% dplyr::select(1:Treatment, dafm, starts_with("SI_")) %>% 
+      tidyr::gather(SVI, value, starts_with("SI_"))
+    
+    p <- ggplot(pd) +
+      geom_line(aes(x = dafm, y = value, group = Plot_ID, col = Treatment), alpha  = 0.3) +
+      facet_wrap(~SVI) +
+      ggsci::scale_color_npg()
+    
+    # check if Output directory exists
+    if(!file.exists(paste0(basedir, "Output"))){
+      dir.create(paste0(basedir, "Output"))
+    }
+    
+    # save plot to pdf
+    pdf(paste0(basedir, "Output/SVI_ts.pdf"), width = 35, height = 35)
+    plot(p)
+    dev.off()
+    
+  }
+  
+  # create data output (list column)
   spc_pre_list <- map(purrr::transpose(SVI_sc_dat), data.table::as.data.table)
   ids[, "SVI_sc"] <- list(spc_pre_list)
   
-  # join with spectral data
+  # join with input spectral data
   data_out <- full_join(data, ids, by = c("Plot_ID", "meas_date"))
   
 } 
@@ -963,15 +991,18 @@ plot_outliers <- function(data, col_in,
   }
   
   # check if Output directory exists
-  if(!file.exists("Output")){
-    dir.create("Output")
+  if(!file.exists(paste0(basedir, "Output"))){
+    dir.create(paste0(basedir, "Output"))
   }
   
   # save plot to pdf
-  levels = nrow(unique(pd[facets]))
+  if(!is.null(facets)){
+    levels <- nrow(unique(pd[facets]))
+  } else {
+    levels <- 1
+  }
   width = 10
-  pdf(paste0("Output/spectra_", col_in,".pdf"), width = width, height = width * (levels/2))
-  # pdf(paste0("C:/Users/anjonas/output/spectra_", col_in,".pdf"), width = width, height = width * (levels/2))
+  pdf(paste0(basedir, "Output/spectra_outs_", col_in,".pdf"), width = width, height = width * (levels/2))
   plot(plot)
   dev.off()
   
@@ -1082,20 +1113,20 @@ plot_spc <- function(data, col_in = "all", treatment = NULL,
     }
     
     # check if Output directory exists
-    if(!file.exists("Output")){
-      dir.create("Output")
+    if(!file.exists(paste0(basedir, "Output"))){
+      dir.create(paste0(basedir, "Output"))
     }
     
     # save plot to pdf
     # individual spectra
     levels = nrow(unique(pd["group"]))
     width = 10
-    pdf(paste0("Output/spectra_trt_", colunm,".pdf"), width = width, height = width * (levels/2))
+    pdf(paste0(basedir, "Output/spectra_trt_", colunm,".pdf"), width = width, height = width * (levels/2))
     # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
     plot(plotf)
     dev.off()
     # spectra means
-    pdf(paste0("Output/spectra_means_", colunm,".pdf"), width = width, height = width * (levels/2))
+    pdf(paste0(basedir, "Output/spectra_means_", colunm,".pdf"), width = width, height = width * (levels/2))
     # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
     plot(plotmeans)
     dev.off()
@@ -1115,5 +1146,4 @@ col_scaling <- function(d) {
 }
 
 # ============================================================================================================= -
-  
 
