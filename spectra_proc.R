@@ -112,7 +112,8 @@ preprocess_spc <- function(data,
 #' @param outliers_rm Character vector or NULL, specifying which type of outliers should be removed (i.e. which of the col_in).
 #' If "all", all samples detected as an outlier in any of the col_in will be removed from the dataset
 #' @param create_plot Boolean, whether the outliers should be plotted
-#' @return A tibble with list columns, 
+#' @return A list, consisting of a tibble with list columns, and a list of measurement_ids detected as mvoutliers,
+#' depending on the spectral input data type (col_in).
 detect_outlier_spectra <- function(data, col_in = "all",
                                    grouping = NULL,
                                    outliers_rm = NULL,
@@ -833,19 +834,23 @@ calculate_SVI <- function(data, col_in, new_col = T) {
 #' @export
 scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
   
-  # extract SVI from list column and add required metadata
-  meta <- data[c(plotid, "meas_date", "Treatment")]
-  SVI_dat <- data.table::rbindlist(data[["SVI"]])
-  d <- cbind(meta, SVI_dat)
-  
   # fix plot identifier 
-  colid <- which(names(d)==plotid)
-  names(d)[colid] <- "Plot_ID"
+  colid <- which(names(data)==plotid)
+  names(data)[colid] <- "Plot_ID"
   
   # keep only plots with measurements covering the entire measurement period
   # get start and end date
-  min_date <- min(d$meas_date)
-  max_date <- max(d$meas_date)
+  min_date <- min(data$meas_date)
+  max_date <- max(data$meas_date)
+  # transform measurement date in days after first measurement
+  # this should be replaced by a measure of chronological or thermal time after heading
+  data$dafm <- as.numeric(as.Date(data$meas_date, "%Y%m%d") - as.Date(min_date, "%Y%m%d"))
+  
+  # extract SVI from list column and add required metadata
+  meta <- data[c(plotid, "meas_date", "dafm", "Treatment")]
+  SVI_dat <- data.table::rbindlist(data[["SVI"]])
+  d <- cbind(meta, SVI_dat)
+  
   # filter dataset
   d_ <- d %>% group_by(Plot_ID) %>% nest() %>% 
     mutate(max = purrr::map_chr(data,  ~max(.$meas_date)),
@@ -860,7 +865,7 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
     unnest(cols = c(SVI_sc))
   
   # revert scale where required
-  ids <- d_scaled[c("Plot_ID", "meas_date", "Treatment")] %>% ungroup()
+  ids <- d_scaled[c("Plot_ID", "meas_date", "dafm", "Treatment")] %>% ungroup()
   SVI_sc_dat <- d_scaled[grepl("^SI_", names(d_scaled))]
   SVI_sc_dat <- SVI_sc_dat %>% 
     mutate_all(funs(r = revert)) %>% 
@@ -870,26 +875,26 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
   
   if(plot){
     
-    # reshape data for plotting
-    pd <- cbind(ids, SVI_sc_dat)
     # transform measurement date in days after first measurement
     # this should be replaced by a measure of chronological or thermal time after heading
-    pd$dafm <- as.numeric(as.Date(pd$meas_date, "%Y%m%d") - as.Date(min_date, "%Y%m%d"))
+    pd <- cbind(ids, SVI_sc_dat)
+    pd$dafm <- as.numeric(as.Date(SVI_sc_dat$meas_date, "%Y%m%d") - as.Date(min_date, "%Y%m%d"))
+    # reshape data for plotting
     pd <- pd %>% dplyr::select(1:Treatment, dafm, starts_with("SI_")) %>% 
       tidyr::gather(SVI, value, starts_with("SI_"))
-    
+  
     p <- ggplot(pd) +
       geom_line(aes(x = dafm, y = value, group = Plot_ID, col = Treatment), alpha  = 0.3) +
       facet_wrap(~SVI) +
       ggsci::scale_color_npg()
     
     # check if Output directory exists
-    if(!file.exists(paste0(basedir, "Output"))){
-      dir.create(paste0(basedir, "Output"))
+    if(!file.exists(paste0(path_to_data, "Output"))){
+      dir.create(paste0(path_to_data, "Output"))
     }
     
     # save plot to pdf
-    pdf(paste0(basedir, "Output/SVI_ts.pdf"), width = 35, height = 35)
+    pdf(paste0(path_to_data, "Output/SVI_ts.pdf"), width = 35, height = 35)
     plot(p)
     dev.off()
     
@@ -900,7 +905,7 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
   ids[, "SVI_sc"] <- list(spc_pre_list)
   
   # join with input spectral data
-  data_out <- full_join(data, ids, by = c("Plot_ID", "meas_date"))
+  data_out <- full_join(data, ids, by = c("Plot_ID", "meas_date", "dafm", "Treatment"))
   
 } 
 
@@ -991,8 +996,8 @@ plot_outliers <- function(data, col_in,
   }
   
   # check if Output directory exists
-  if(!file.exists(paste0(basedir, "Output"))){
-    dir.create(paste0(basedir, "Output"))
+  if(!file.exists(paste0(path_to_data, "Output"))){
+    dir.create(paste0(path_to_data, "Output"))
   }
   
   # save plot to pdf
@@ -1002,7 +1007,7 @@ plot_outliers <- function(data, col_in,
     levels <- 1
   }
   width = 10
-  pdf(paste0(basedir, "Output/spectra_outs_", col_in,".pdf"), width = width, height = width * (levels/2))
+  pdf(paste0(path_to_data, "Output/spectra_outs_", col_in,".pdf"), width = width, height = width * (levels/2))
   plot(plot)
   dev.off()
   
@@ -1010,7 +1015,8 @@ plot_outliers <- function(data, col_in,
 
 plot_spc <- function(data, col_in = "all", treatment = NULL,
                      facets = NULL,
-                     mark_outliers = FALSE){
+                     mark_outliers = FALSE,
+                     topdf = FALSE){
 
   print("plotting spectra ...")
   
@@ -1113,24 +1119,29 @@ plot_spc <- function(data, col_in = "all", treatment = NULL,
     }
     
     # check if Output directory exists
-    if(!file.exists(paste0(basedir, "Output"))){
-      dir.create(paste0(basedir, "Output"))
+    if(!file.exists(paste0(path_to_data, "Output"))){
+      dir.create(paste0(path_to_data, "Output"))
     }
     
-    # save plot to pdf
-    # individual spectra
-    levels = nrow(unique(pd["group"]))
-    width = 10
-    pdf(paste0(basedir, "Output/spectra_trt_", colunm,".pdf"), width = width, height = width * (levels/2))
-    # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
-    plot(plotf)
-    dev.off()
-    # spectra means
-    pdf(paste0(basedir, "Output/spectra_means_", colunm,".pdf"), width = width, height = width * (levels/2))
-    # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
-    plot(plotmeans)
-    dev.off()
-    
+    if(topdf){
+      # save plot to pdf
+      # individual spectra
+      levels = nrow(unique(pd["group"]))
+      width = 10
+      pdf(paste0(path_to_data, "Output/spectra_trt_", colunm,".pdf"), width = width, height = width * (levels/2))
+      # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
+      plot(plotf)
+      dev.off()
+      # spectra means
+      pdf(paste0(path_to_data, "Output/spectra_means_", colunm,".pdf"), width = width, height = width * (levels/2))
+      # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
+      plot(plotmeans)
+      dev.off()
+    } else{
+      plot(plotf)
+      plot(plotmeans)
+    }
+
   }
 
 }
@@ -1145,5 +1156,38 @@ col_scaling <- function(d) {
   return(out)
 }
 
+# Linear interpolation
+lin_approx <- function(data, t = "dafm", n_meas){
+  
+  data <- as.data.frame(data)
+  
+  # linearly interpolate between measurement time points
+  out <- approx(data[, t], data[,"value"], xout = seq(round(min(data[,t], na.rm = TRUE), 0),
+                                                      round(max(data[,t], na.rm = TRUE), 0), 1))
+  names(out) <- c(t, ".fitted")
+  
+  # check that time series is complete
+  # and first measurement is larger than the critical value for onset
+  n <- nrow(data)
+  init <- data[1,2]
+  if(n < n_meas || init <= 8){
+    out$.fitted <- rep(NA, length(out$dafm))
+  }
+  return(out)
+}
+
+# Extraction of parameters from fits
+extract_pars <- function(data, t = "dafm"){
+  t80 <- data[which(data[".fitted"] < 8)[1], t]
+  t50 <- data[which(data[".fitted"] < 5)[1], t]
+  t20 <- data[which(data[".fitted"] < 2)[1], t]
+  dur1 <- t50 - t80
+  dur2 <- t20 - t80
+  pars <- cbind(t80, t50, t20, dur1, dur2)
+  return(pars)
+}
+
 # ============================================================================================================= -
+
+
 
