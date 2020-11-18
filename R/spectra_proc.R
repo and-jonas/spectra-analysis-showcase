@@ -13,7 +13,7 @@
 #' All files meeting these criteria are read. 
 #' @export
 load_spectra <- function(dir, format = "sed"){
-  print("loading spetra ...")
+  # print("loading spetra ...")
   # get all subdirectories
   subdirs <- dir(path = dir, full.names = TRUE, recursive = FALSE, pattern = "^[0-9]{8}")
   # get all filenames
@@ -24,7 +24,7 @@ load_spectra <- function(dir, format = "sed"){
     lapply(., read_spectrum, format = format) %>% 
     # bind to tible
     data.table::rbindlist(.,) %>% tibble::as_tibble()
-  print("done")
+  # print("done")
   return(data)
 }
 
@@ -43,21 +43,25 @@ load_spectra <- function(dir, format = "sed"){
 preprocess_spc <- function(data,
                            p = 3, w = 21, m = 0, 
                            col_in = "rflt", 
-                           new_col = TRUE, 
+                           new_col = FALSE, 
                            snv = FALSE,
-                           trim = c(1350, 1475, 1781, 1990, 2400, 2500),
-                           binning = 3){
+                           trim = NULL,
+                           binning = NULL){
   
-  print("pre-processing spectra ...")
+  # print("pre-processing spectra ...")
   
   # Convert list of data.tables to one data.table
   spc_raw <- data.table::rbindlist(data[[col_in]])
   
-  # set column names depending on selected parameters
-  ptype <- paste0("p", p, "w", w, "m", m)
-  
   # apply SavitzkyGolay filter to smooth spectra
-  spc_pp <- with(data, prospectr::savitzkyGolay(spc_raw, p = p, w = w, m = m))
+  if(p != 0){
+    # set column names depending on selected parameters
+    ptype <- paste0("p", p, "w", w, "m", m)
+    spc_pp <- with(data, prospectr::savitzkyGolay(spc_raw, p = p, w = w, m = m))
+  } else {
+    ptype = gsub("rflt_", "", col_in)
+    spc_pp <- spc_raw %>% as.matrix()
+  }
   
   # calculate the standard normal variate (AFTER filtering; Fearn, 2008)
   if(snv){
@@ -93,7 +97,7 @@ preprocess_spc <- function(data,
   
   # replace raw spectra with pre-processed spectra
   if(new_col == F){
-    spc_pp <- data[,-grep(col_in, colnames(data))]
+    spc_pp <- data[,-which(colnames(data) == col_in)]
   } else {
     spc_pp <- data
   }
@@ -102,6 +106,7 @@ preprocess_spc <- function(data,
   return(spc_pp)
   
 }
+
 
 #' Detects multivariate outliers in spectral datasets 
 #' @param data A tibble with spectra in list columns of data.tables, as returned by "load_spectra()" and "preprocess_spc". 
@@ -117,9 +122,10 @@ preprocess_spc <- function(data,
 detect_outlier_spectra <- function(data, col_in = "all",
                                    grouping = NULL,
                                    outliers_rm = NULL,
-                                   create_plot = T){
+                                   create_plot = T,
+                                   topdf = F){
   
-  print("detecting multivariate outliers ...")
+  # print("detecting multivariate outliers ...")
   
   # fix grouping structure if exists
   if(!is.null(grouping)){
@@ -154,7 +160,7 @@ detect_outlier_spectra <- function(data, col_in = "all",
     
     if(create_plot){
       plot_outliers(data, j, mark_outliers = T, 
-                    facets = grouping)
+                    facets = grouping, topdf = topdf)
     }
     
     out_idx <- which(outlier == 1)
@@ -165,7 +171,7 @@ detect_outlier_spectra <- function(data, col_in = "all",
   # drop outliers
   if(!is.null(outliers_rm)){
     
-    print("removing outliers from dataset ...")
+    # print("removing outliers from dataset ...")
     
     # get index of columns to drop
     if("all" %in% outliers_rm){
@@ -185,15 +191,15 @@ detect_outlier_spectra <- function(data, col_in = "all",
 
 #' Calculates spectral vegetation indices
 #' @param data A tibble with spectra in list columns of data.tables, as returned by "load_spectra()" and "preprocess_spc"
-#' @param col_in Column of the tibble to containing the spectra to use
+#' @param col_in Column name of the tibble containing the spectra to use as character string
 #' @param new_col Boolean, whether to add output as a new list column or overwrite the input column
 #' @return A tibble with list columns
 #' @export
 calculate_SVI <- function(data, col_in, new_col = T) {
   
-  print("calculating spectral indices ...")
+  # print("calculating spectral indices ...")
   
-  d <- data.table::rbindlist(dd[[col_in]]) %>% tibble::as_tibble()
+  d <- data.table::rbindlist(data[[col_in]]) %>% tibble::as_tibble()
   
   # BANDS ########################################################################## -
   ALI5 <- rowMeans(d[775:805])
@@ -825,14 +831,13 @@ calculate_SVI <- function(data, col_in, new_col = T) {
   
 }
 
-#' Sclaes spectral indices to range from 0 to 10 
+#' Scales spectral indices to range from 0 to 10 
 #' representing the minimum and maximum value observed in a time series of measurements
 #' @param data A tibble with SVI values in a list column of data.tables, as returned by "calculate_SVI"
 #' @param plotid The variable name of the plot identifier
 #' @return A tibble with list columns
 #' @details This function reverts the scale for SVI with an increase during the measurement period
-#' @export
-scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
+scale_SVI <- function(data, plotid = "Plot_ID", plot = T, topdf = F) {
   
   # fix plot identifier 
   colid <- which(names(data)==plotid)
@@ -878,7 +883,7 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
     # transform measurement date in days after first measurement
     # this should be replaced by a measure of chronological or thermal time after heading
     pd <- cbind(ids, SVI_sc_dat)
-    pd$dafm <- as.numeric(as.Date(SVI_sc_dat$meas_date, "%Y%m%d") - as.Date(min_date, "%Y%m%d"))
+    pd$dafm <- as.numeric(as.Date(pd$meas_date, "%Y%m%d") - as.Date(min_date, "%Y%m%d"))
     # reshape data for plotting
     pd <- pd %>% dplyr::select(1:Treatment, dafm, starts_with("SI_")) %>% 
       tidyr::gather(SVI, value, starts_with("SI_"))
@@ -886,18 +891,23 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
     p <- ggplot(pd) +
       geom_line(aes(x = dafm, y = value, group = Plot_ID, col = Treatment), alpha  = 0.3) +
       facet_wrap(~SVI) +
-      ggsci::scale_color_npg()
+      ggsci::scale_color_npg() +
+      theme_bw(base_size = 7)
     
     # check if Output directory exists
     if(!file.exists(paste0(path_to_data, "Output"))){
       dir.create(paste0(path_to_data, "Output"))
     }
     
-    # save plot to pdf
-    pdf(paste0(path_to_data, "Output/SVI_ts.pdf"), width = 35, height = 35)
-    plot(p)
-    dev.off()
-    
+    if(topdf){
+      # save plot to pdf
+      pdf(paste0(path_to_data, "Output/SVI_ts.pdf"), width = 35, height = 35)
+      plot(p)
+      dev.off()
+    } else {
+      plot(p)
+    }
+
   }
   
   # create data output (list column)
@@ -909,6 +919,308 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
   
 } 
 
+#' Gets dynamics parameters for each index and plot
+#' @param data A tibble with scaled SVI values in a list column of data.tables, as returned by "scale_SVI"
+#' @param timevar A character string specifying the name of the column containing the time variable
+#' @param method A character string specifying the method to be used for modelling of the temporal index dynamics. 
+#' So far, only "interpolate" is supported.
+#' @param plot Boolean, indicating whether or not to create a plot
+#' @param topdf Boolean, indicating whether or not to save the plot to pdf
+#' @return A tibble containing the dynamics parameters for each Plot and SVI. 
+get_svi_dynamics <- function(data, timevar, method = "interpolate",
+                             plot = T, topdf = F){
+  
+  # unnest 
+  if(!is.null(data[["SVI_sc"]])){
+    dat_svi <- data.table::rbindlist(data[["SVI_sc"]])
+  } else {
+    stop("Dynamics parameters can only be extracted from scaled SVI values!")
+  }
+  
+  # fix variable names
+  names(data)[which(names(data)==timevar)] <- "timevar"
+  
+  # reshape
+  meta <- data[, names(data) %in% c("Plot_ID", "Treatment", "timevar")]
+  dat <- cbind(meta, dat_svi)
+  dat_long <- melt(dat, 
+                   id.vars = c("Plot_ID", "Treatment", "timevar"),
+                   measure.vars = c(grep("^SI_", names(dat), value = T)))
+  
+  # fit parametric model or perform linear interpolation
+  dat_mod <- dat_long %>%
+    dplyr::group_by(Plot_ID, variable, Treatment) %>%
+    tidyr::nest()
+  if(method == "interpolate"){
+    fits <- dat_mod %>%
+      mutate(fit = purrr::map(data, lin_approx, n_meas = 6) %>% purrr::map(cbind.data.frame)) %>%
+      transmute(pars = purrr::map(fit, extract_pars) %>% purrr::map(cbind.data.frame)) %>%
+      unnest(pars)
+  } else {
+    stop("Only linear interpolation between measurement timepoints is implemented so far. Specify by setting method = interpolate")
+  }
+
+  if(plot){
+
+    dur <- fits %>% dplyr::select(Plot_ID, Treatment, variable, dur1, dur2) %>%
+      tidyr::gather(param, value, dur1:dur2)
+
+    tps <- fits %>% dplyr::select(Plot_ID, Treatment, variable, t80:t20) %>%
+      tidyr::gather(param, value, t80:t20)
+
+    plot1 <- ggplot(dur) +
+      geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
+      facet_wrap(~variable) +
+      ggsci::scale_fill_npg() +
+      theme_bw(base_size = 7) +
+      theme(panel.grid = element_blank(),
+            panel.background = element_blank())
+
+    plot2 <- ggplot(tps) +
+      geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
+      facet_wrap(~variable) +
+      ggsci::scale_fill_npg() +
+      theme_bw(base_size = 7) +
+      theme(panel.grid = element_blank(),
+            panel.background = element_blank())
+
+    plot(plot1)
+    plot(plot2)
+
+  }
+
+  return(fits)
+
+}
+
+#' Plots reflectance spectra and pre-processing products
+#' @param data A tibble with spectra in list columns of data.tables, as returned by "load_spectra()" and "preprocess_spc" 
+#' @param col_in Column name of the tibble containing the spectra to use as character string
+#' @param treatment Character string specifying the name of the variable indicating the treatments
+#' @param xlim numeric vector, specifying the range along the x-axis to plot, defaults to c(350, 2500)
+#' @param facets Character vector specifying the variable to use as facetting variable, passed to ggplot::facet_wrap()
+#' @param mark_outliers Boolean, whether or not to mark multivariate outliers
+#' @param topdf Boolean, whether or not to save the plot as a pdf
+#' @return A ggplot object
+plot_spectra <- function(data, col_in = "all", treatment = NULL,
+                         xlim = c(350, 2500),
+                         facets = NULL,
+                         mark_outliers = FALSE,
+                         topdf = FALSE){
+  
+  # print("plotting spectra ...")
+  
+  if("all" %in% col_in){
+    col_in <- grep("^rflt_", names(data), value = TRUE)
+  }
+  
+  # factorise and rename structuring variables
+  if(!is.null(treatment)){
+    data[[treatment]] <- as.factor(data[[treatment]])
+    data <- dplyr::rename(data, "Treatment" = treatment)
+  }
+  if(!is.null(facets)){
+    data[[facets]] <- as.factor(data[[facets]])
+    data <- dplyr::rename(data, "group" = facets)
+  } else{
+    group <- NULL
+  }
+  
+  # iterate over data types
+  for (colunm in col_in) {
+    
+    # reshape data for plotting
+    pd <- data %>% dplyr::select(meas_id, group, treatment, colunm) %>% unnest(c(colunm)) %>% 
+      tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
+      mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
+      add_spc_range()
+    
+    otype = paste0("out_", colunm)
+    
+    ylim1 <-max(pd[pd$wvlt %in% seq(xlim[1], xlim[2], 1),]$rflt)
+    ylim2 <- min(pd[pd$wvlt %in% seq(xlim[1], xlim[2], 1),]$rflt)
+    ylim <- c(ylim2, ylim1)
+    
+    # create empty plot
+    plot <- ggplot() + 
+      xlab("Wavelength (nm)") + ylab(col_in) +
+      xlim(xlim) + ylim(ylim) +
+      theme_bw() + 
+      theme(panel.grid = element_blank())
+    
+    # add spectra
+    if(!is.null(treatment)){
+      
+      plotf <- plot +
+        geom_line(data = pd, aes(x = wvlt, y = rflt,  group = interaction(meas_id, spc_range),
+                                 col = Treatment), size = 0.05, alpha = 0.25) +
+        ggsci::scale_color_npg()
+      
+      # calculate mean and sd of reflectance
+      if(!is.null(facets)){
+        pdmeans <- pd %>% group_by(Treatment, group, wvlt, spc_range)
+      } else {
+        pdmeans <- pd %>% group_by(Treatment, wvlt, spc_range)
+      }
+      pdmeans <- pdmeans %>% 
+        dplyr::summarise(mean_rflt = mean(rflt, na.rm = T),
+                         sd_rflt = sd(rflt, na.rm = T))
+      
+      # plot mean and sd per treatment and group
+      plotmeans <- plot +
+        geom_line(data = pdmeans, aes(x = wvlt, y = mean_rflt,  group = interaction(Treatment, spc_range),
+                                      col = Treatment), size = 1, alpha = 1) +
+        geom_ribbon(data=pdmeans, aes(x = wvlt, ymin = mean_rflt - sd_rflt, 
+                                      ymax = mean_rflt + sd_rflt, 
+                                      fill = Treatment, 
+                                      group = interaction(Treatment, spc_range)), alpha = 0.25) +
+        ggsci::scale_color_npg() +
+        ggsci::scale_fill_npg()
+    } else {
+      plotf <- plot + 
+        geom_line(data = pd, aes(x = wvlt, y = rflt,  group = interaction(meas_id, spc_range)), size = 0.05, alpha = 0.25)
+    }
+    
+    # add facets
+    if(!is.null(facets)){
+      plotf <- plotf +
+        facet_wrap(~group, ncol = 1, scales = "free")
+      if(!is.null(treatment)){
+        plotmeans <- plotmeans +
+          facet_wrap(~group, ncol = 1, scales = "free")
+      }
+    }
+    
+    # mark outliers
+    if(mark_outliers){
+      
+      if(otype %in% names(data)){
+        
+        # print("marking outliers ...")
+        
+        # reshape data for plotting
+        pd_out <- data %>% dplyr::select(meas_id, group, treatment, colunm, otype) %>% unnest(c(colunm)) %>% 
+          tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
+          mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
+          add_spc_range()
+        
+        # mark outliers
+        plotf <- plotf +
+          geom_line(data = pd_out[pd_out[otype] == 1,], aes(x = wvlt, y = rflt, group = interaction(meas_id, spc_range)),
+                    size = 0.05, alpha = 1, col = "black", lty = "dashed")
+        
+      } else {
+        print("no data for outliers found!")
+      }
+      
+    }
+    
+    # check if Output directory exists
+    if(!file.exists(paste0(path_to_data, "Output"))){
+      dir.create(paste0(path_to_data, "Output"))
+    }
+    
+    if(topdf){
+      # save plot to pdf
+      # individual spectra
+      levels = nrow(unique(pd["group"]))
+      width = 10
+      pdf(paste0(path_to_data, "Output/spectra_trt_", colunm,".pdf"), width = width, height = width * (levels/2))
+      # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
+      plot(plotf)
+      dev.off()
+      # spectra means
+      if(exists("plotmeans")){
+        pdf(paste0(path_to_data, "Output/spectra_means_", colunm,".pdf"), width = width, height = width * (levels/2))
+        plot(plotmeans)
+        dev.off()
+      }
+    } else{
+      plot(plotf)
+      if(exists("plotmeans")){
+        plot(plotmeans)
+      }
+    }
+    
+  }
+  
+}
+
+#' Creates plots of spectral index values
+#' @param data A tibble with original and/or scaled SVI values in list column(s) of data.tables
+#' @param svi A vector of character strings specifying the name(s) of indices to show
+#' @param col_in A character string specifying which type of Index values to use
+#' @param x A character string specifying the x-variable
+#' @param x_is_date Boolean, whether or not the x variable is a date
+#' @param groups A character string specifying the grouping structure of the data
+#' @param topdf Boolean, whether or not to save the plot to pdf
+#' @return A ggplot
+plot_SVI <- function(data, 
+                     svi, col_in,
+                     x, x_is_date = FALSE, 
+                     groups = NULL,
+                     topdf = FALSE){
+  
+  # for variable selection
+  svis <- paste0("_", svi)
+  pattern <- paste0(svis, collapse = "|")
+  # unnest SVI data
+  dat_svi <- data.table::rbindlist(data[[col_in]])
+  namevec <- grep(pattern = pattern, names(dat_svi), value = T)
+  dat_svi <- dat_svi[, ..namevec]
+  # extract meta data
+  meta <- data[, !grepl("^rflt|^SVI", names(SVI))]
+  dat <- cbind(meta, dat_svi)
+  # reshape for plotting
+  dat_long <- melt(dat, 
+                   id.vars = c("Plot_ID", "meas_date", "Treatment"),
+                   measure.vars = c(grep("^SI_", names(dat), value = T)))
+  
+  # fix variable names
+  if(!is.null(groups)){
+    names(dat_long)[which(names(dat_long) == groups)] <- "groups"
+  }
+  names(dat_long)[which(names(dat_long) == x)] <- "xvar"
+  
+  if(x_is_date){
+    dat_long$xvar <- as.Date(dat_long$xvar, format = "%Y%m%d")
+  }
+  
+  # create plot of index values
+  p <- ggplot() +
+    xlab(x) + ylab("Index value") +
+    theme_bw() +
+    theme(panel.grid = element_blank())
+  
+  if(is.null(x)){
+    p <- p + geom_boxplot(data = dat_long, aes(y = value))
+  } else {
+    if(!is.null(groups)){
+      p <- p + geom_boxplot(data = dat_long, aes(x = xvar, y = value, group = interaction(xvar, groups), fill = groups)) +
+        ggsci::scale_fill_npg() +
+        guides(fill = guide_legend(title = groups))
+      
+    } else {
+      p <- p + geom_boxplot(data = dat_long, aes(x = xvar, y = value, group = interaction(xvar)))
+    }
+  }
+  
+  p <- p + facet_wrap(~dat_long$variable, scales = "free")
+  
+  
+  if(topdf){
+    # check if Output directory exists
+    if(!file.exists(paste0(path_to_data, "Output"))){
+      dir.create(paste0(path_to_data, "Output"))
+    }
+    pdf(paste0(path_to_data, "Output/SVI.pdf"))
+    plot(p)
+    dev.off()
+  } else {
+    plot(p)
+  }
+  
+}
 
 # ============================================================================================================= -
 
@@ -918,7 +1230,6 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T) {
 #' @param dir full file name
 #' @param format file extension as a character string, "sed" or "asd"
 #' @return A tibble with measurement_id, measurement date and the spectrum in a data.table
-#' @export
 read_spectrum <- function(dir, format = "sed"){
   if(format == "sed"){
     # read file 
@@ -964,10 +1275,11 @@ add_spc_range <- function(data){
 } 
 
 plot_outliers <- function(data, col_in, 
-                          mark_outliers = T, 
-                          facets = "meas_date"){
+                          mark_outliers = TRUE, 
+                          facets = "meas_date",
+                          topdf = FALSE){
   
-  print("plotting spectra ...")
+  # print("plotting spectra ...")
   
   otype <- paste0("out_", col_in)
   
@@ -1006,142 +1318,14 @@ plot_outliers <- function(data, col_in,
   } else {
     levels <- 1
   }
-  width = 10
-  pdf(paste0(path_to_data, "Output/spectra_outs_", col_in,".pdf"), width = width, height = width * (levels/2))
-  plot(plot)
-  dev.off()
   
-}
-
-plot_spc <- function(data, col_in = "all", treatment = NULL,
-                     facets = NULL,
-                     mark_outliers = FALSE,
-                     topdf = FALSE){
-
-  print("plotting spectra ...")
-  
-  if("all" %in% col_in){
-    col_in <- grep("^rflt_", names(data), value = TRUE)
-  }
-  
-  # factorise and rename structuring variables
-  if(!is.null(treatment)){
-    data[[treatment]] <- as.factor(data[[treatment]])
-    data <- dplyr::rename(data, "Treatment" = treatment)
-  }
-  if(!is.null(facets)){
-    data[[facets]] <- as.factor(data[[facets]])
-    data <- dplyr::rename(data, "group" = facets)
-  } else{
-    group <- NULL
-  }
-  
-  # iterate over data types
-  for (colunm in col_in) {
-    
-    # reshape data for plotting
-    pd <- data %>% dplyr::select(meas_id, group, treatment, colunm) %>% unnest(c(colunm)) %>% 
-      tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
-      mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
-      add_spc_range()
-    
-    otype = paste0("out_", colunm)
-    
-    # create empty plot
-    plot <- ggplot() + 
-      # geom_abline(intercept = 0, slope = 0) +
-      theme_bw() + 
-      theme(panel.grid = element_blank())
-  
-    # add spectra
-    if(!is.null(treatment)){
-      
-      plotf <- plot +
-        geom_line(data = pd, aes(x = wvlt, y = rflt,  group = interaction(meas_id, spc_range),
-                                 col = Treatment), size = 0.05, alpha = 0.25) +
-        ggsci::scale_color_npg()
-        
-      # calculate mean and sd of reflectance
-      if(!is.null(facets)){
-        pdmeans <- pd %>% group_by(Treatment, group, wvlt, spc_range)
-      } else{
-        pdmeans <- pd %>% group_by(Treatment, wvlt, spc_range)
-      }
-      pdmeans <- pdmeans %>% 
-        dplyr::summarise(mean_rflt = mean(rflt, na.rm = T),
-                         sd_rflt = sd(rflt, na.rm = T))
-      
-      # plot mean and sd per treatment and group
-      plotmeans <- plot +
-        geom_line(data = pdmeans, aes(x = wvlt, y = mean_rflt,  group = interaction(Treatment, spc_range),
-                                 col = Treatment), size = 1, alpha = 1) +
-        geom_ribbon(data=pdmeans, aes(x = wvlt, ymin = mean_rflt - sd_rflt, 
-                                      ymax = mean_rflt + sd_rflt, 
-                                      fill = Treatment, 
-                                      group = interaction(Treatment, spc_range)), alpha = 0.25) +
-        ggsci::scale_color_npg() +
-        ggsci::scale_fill_npg()
-      } else {
-      plotf <- plot + 
-        geom_line(data = pd, aes(x = wvlt, y = rflt,  group = interaction(meas_id, spc_range)), size = 0.05, alpha = 0.25)
-    }
-    
-    # add facets
-    if(!is.null(facets)){
-      plotf <- plotf +
-        facet_wrap(~group, ncol = 1, scales = "free")
-      plotmeans <- plotmeans +
-        facet_wrap(~group, ncol = 1, scales = "free")
-    }
-    
-    # mark outliers
-    if(mark_outliers){
-      
-      if(otype %in% names(data)){
-        
-        print("marking outliers ...")
-        
-        # reshape data for plotting
-        pd_out <- data %>% dplyr::select(meas_id, group, treatment, colunm, otype) %>% unnest(c(colunm)) %>% 
-          tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
-          mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
-          add_spc_range()
-        
-        # mark outliers
-        plotf <- plotf +
-          geom_line(data = pd_out[pd_out[otype] == 1,], aes(x = wvlt, y = rflt, group = interaction(meas_id, spc_range)),
-                    size = 0.05, alpha = 1, col = "darkred", lty = "dashed")
-        
-      } else {
-        print("no data for outliers found!")
-      }
-      
-    }
-    
-    # check if Output directory exists
-    if(!file.exists(paste0(path_to_data, "Output"))){
-      dir.create(paste0(path_to_data, "Output"))
-    }
-    
-    if(topdf){
-      # save plot to pdf
-      # individual spectra
-      levels = nrow(unique(pd["group"]))
-      width = 10
-      pdf(paste0(path_to_data, "Output/spectra_trt_", colunm,".pdf"), width = width, height = width * (levels/2))
-      # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
-      plot(plotf)
-      dev.off()
-      # spectra means
-      pdf(paste0(path_to_data, "Output/spectra_means_", colunm,".pdf"), width = width, height = width * (levels/2))
-      # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
-      plot(plotmeans)
-      dev.off()
-    } else{
-      plot(plotf)
-      plot(plotmeans)
-    }
-
+  if(topdf){
+    width = 10
+    pdf(paste0(path_to_data, "Output/spectra_outs_", col_in,".pdf"), width = width, height = width * (levels/2))
+    plot(plot)
+    dev.off()
+  } else {
+    plot(plot)
   }
 
 }
@@ -1156,31 +1340,30 @@ col_scaling <- function(d) {
   return(out)
 }
 
-# Linear interpolation
-lin_approx <- function(data, t = "dafm", n_meas){
+lin_approx <- function(data, n_meas){
   
   data <- as.data.frame(data)
   
   # linearly interpolate between measurement time points
-  out <- approx(data[, t], data[,"value"], xout = seq(round(min(data[,t], na.rm = TRUE), 0),
-                                                      round(max(data[,t], na.rm = TRUE), 0), 1))
-  names(out) <- c(t, ".fitted")
+  out <- approx(data[, "timevar"], data[,"value"],
+                xout = seq(round(min(data[, "timevar"], na.rm = TRUE), 0),
+                           round(max(data[, "timevar"], na.rm = TRUE), 0), 1))
+  names(out) <- c("timevar", ".fitted")
   
   # check that time series is complete
   # and first measurement is larger than the critical value for onset
   n <- nrow(data)
   init <- data[1,2]
   if(n < n_meas || init <= 8){
-    out$.fitted <- rep(NA, length(out$dafm))
+    out$.fitted <- rep(NA, length(out["timevar"]))
   }
   return(out)
 }
 
-# Extraction of parameters from fits
-extract_pars <- function(data, t = "dafm"){
-  t80 <- data[which(data[".fitted"] < 8)[1], t]
-  t50 <- data[which(data[".fitted"] < 5)[1], t]
-  t20 <- data[which(data[".fitted"] < 2)[1], t]
+extract_pars <- function(data){
+  t80 <- data[which(data[".fitted"] < 8)[1], "timevar"]
+  t50 <- data[which(data[".fitted"] < 5)[1], "timevar"]
+  t20 <- data[which(data[".fitted"] < 2)[1], "timevar"]
   dur1 <- t50 - t80
   dur2 <- t20 - t80
   pars <- cbind(t80, t50, t20, dur1, dur2)
