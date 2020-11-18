@@ -2,7 +2,9 @@
 title: "Spectral Data Analysis Showcase"
 author: "Jonas Anderegg  jonas.anderegg@usys.ethz.ch"
 date: "16 11 2020"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE, message=FALSE, warning=FALSE}
@@ -12,6 +14,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Background 
 
 Processing and analysis of hyperspectral data is often performed using commercial software tools such as ENVI or the hyperspectral toolbox in MATLAB. Several R packages are also available for spectral data processing and analysis. Examples include the hyperSpec and hsdar packages. Compared to these, the set of functions presented here is limited in its functionality and therefore not a substitute for them. However, it allows users with minimal experience in spectral data analysis and R programming to implement a few standard steps in spectral data analysis such as signal filtering/pre-processing, visual inspection of the data including effects of treatments and measurement time point, calculation and scaling of spectral vegetation indices and multivariate outlier detection and removal. The functionalities are demonstrated in the following using a spectral dataset collected between 18 May 2020 and July 9 2020 at Agroscope Changins. The aim of the measurements was to evaluate the feasibility of fusarium head blight (FHB) detection and FHB severity quantification using a time series of spectral reflectance measurements on single lines of wheat plants. 
+
+
 ## Prepare environment and load data
 
 The below code will prepare your R environment (i.e. install and load the required R packages) 
@@ -74,7 +78,7 @@ data$rflt[[1]] %>% as_tibble()
 
 ```
 
-
+5
 ## Spectra Pre-processing
 
 The function plot_spectra() can be used to visualize reflectance spectra. For this, the column "rflt" is specified as input data. 
@@ -127,7 +131,7 @@ spc_pp <- spc_pp %>%
   preprocess_spc(col_in = "rflt_p3w21m0", # smoothed spectra
                  p = 0, # Savitzky-Golay smoothing was done previously
                  trim = c(1350, 1475, 1781, 1990, 2400, 2500), # three spectral regions are removed
-                 new_col = FALSE) # existing col_in is overwritten
+                 new_col = TRUE) # existing col_in is overwritten
 plot_spectra(spc_pp, col_in = "rflt_p3w21m0_trim") # check result
 
 ```
@@ -149,7 +153,7 @@ spc_pp <- spc_pp %>%
   detect_outlier_spectra(grouping = "meas_date", # specify the grouping variable
                          col_in = "rflt_p3w21m0_trim",
                          outliers_rm = NULL, # do not remove measurements detected as outliers 
-                         create_plot = T)
+                         create_plot = F)
 ```
 
 Detected multivariate outliers are marked in red. Which measurements are detected as outliers depends on the type of data used. Using e.g. first derivatives will identify other measurements as outliers than the ones identified here. 
@@ -158,7 +162,7 @@ Apart from the above figure, the function detect_outlier_spectra() also returns 
 
 ## Treatment effects
 
-A central question is often whether treatments of some kind can be distinguished using spectral reflectance. Such treatments can consist in e.g., different fertilizer application regimes. In this dataset, treatments consist in the presence or absence of artificial inoculation with FHB. To get a quick idea whether treatments have an effect on reflectance properties of the studied vegetation, the plot_spectra() can be used an the treatment variable(s) specified:
+A central question is often whether treatments of some kind can be distinguished using spectral reflectance. Such treatments can consist in e.g., different fertilizer application regimes. In this dataset, treatments consist in the presence or absence of artificial inoculation with FHB. To get a quick idea whether treatments have an effect on reflectance properties of the studied vegetation, the plot_spectra() can be used and the treatment variable specified. So far, treatments consisting of a factor combination must be encoded with a dummy variable with levels representing the full-factorial combination. 
 
 ```{r, message = FALSE, warning = FALSE, echo=TRUE, fig.width=3, fig.height=7}
 
@@ -169,6 +173,47 @@ spc_ref <- right_join(meta, spc_pp[[1]], by = c("sed_new" = "meas_id")) %>%
 
 # plot spectra
 plot_spectra(spc_ref, facets = "meas_date", col_in = "rflt_p3w21m0_trim", 
-         treatment = "Treatment", mark_outliers = T)
+             treatment = "Treatment", mark_outliers = T)
 ```
 
+## Spectral Vegetation Indices
+
+Most often, the first step in hyperspectral data analysis (after signal pre-processing and data exploration and quality control) consists in the calculation of spectral vegetation indices (SVI) and a correlation analysis with a reference measurement (here FHB disease severity). Spectral vegetation indices are mathematical combinations of reflectance values at specific wavelengths and therefore use only a small part of the full spectra. The goal of this analysis is to identify SVI that could be used as a surrogate for a reference measurement (here a visual scoring of disease symptoms). 
+
+A large number of SVI have been developed for different purposes in different types of vegetation, ranging from the estimation of ground cover to disease severity estimation. The function calculate_SVI() calculates reflectance-based SVI. Other SVI use differently pre-processed spectra (e.g., the first derivative). 
+
+```{r, message = FALSE, warning = FALSE, echo=TRUE, fig.width=3, fig.height=7}
+SVI <- spc_ref %>% 
+  calculate_SVI(col_in = "rflt_p3w21m0")
+
+```
+
+The function plot_SVI() can be used to visualize results. Through the argument "svi" the a seletion of indices to visualize can be made. The argument "x" is used to specify the 
+
+```{r, message = FALSE, warning = FALSE, echo=TRUE}
+plot_SVI(SVI, svi = c("SIPI", "PSRI"), col_in = "SVI",
+         x = "meas_date")
+
+```
+
+It can be seen that the scale for different SVIs is different, and some increase over time, whereas others decrease. It would be helpful for direct comparisons and for downstream analysis to homogenize scales for different SVI. This can be done using the function scale_SVI(). 
+
+```{r, message = FALSE, warning = FALSE, echo=TRUE, fig.width=12, fig.height=12}
+SVI <- scale_SVI(SVI, plot = F)
+
+```
+
+Furthermore, in the plot above, it would be instructive to differentiate between treatments, and to scale the x axis to represent measurment dates, rather than just factor levels. For this, the call to plot_SVI() is modified as follows: 
+
+```{r, message = FALSE, warning = FALSE, echo=TRUE, fig.width=12, fig.height=12}
+plot_SVI(SVI, svi = c("SIPI", "PSRI", "NDVI"),
+         col_in = "SVI_sc",
+         x = "meas_date",
+         x_is_date = TRUE,
+         groups = "Treatment")
+
+```
+
+```{r, message = FALSE, warning = FALSE, echo=TRUE, fig.width=12, fig.height=12}
+parameters <- get_svi_dynamics(data = SVI, timevar = "dafm", plot = T)
+```

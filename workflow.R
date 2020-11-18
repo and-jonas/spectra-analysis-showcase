@@ -36,13 +36,14 @@ plot_spectra(data, col_in = "rflt")
 # pre-process spectra
 spc_pp <- data %>% 
   # default
-  preprocess_spc() %>%
-  # for calculation of SVI
-  preprocess_spc(trim = NULL, bin = NULL) %>% 
+  preprocess_spc(new_col = TRUE) %>%
   # alternative parameters
-  preprocess_spc(snv = T) %>% 
-  preprocess_spc(m = 1) %>% 
-  preprocess_spc(m = 1, snv = T) 
+  preprocess_spc(snv = T, new_col = TRUE) %>% 
+  preprocess_spc(m = 1, new_col = TRUE) %>% 
+  preprocess_spc(m = 1, snv = T, new_col = TRUE) %>% 
+  preprocess_spc(m = 0, snv = F, new_col = TRUE, 
+                 trim = c(1350, 1475, 1781, 1990, 2400, 2500), 
+                 binning = 3)
 
 # ============================================================================================================= -
 
@@ -53,7 +54,7 @@ spc_pp_o <- spc_pp %>%
                          create_plot = T)
 
 # add measurement meta data
-meta <- read_csv(paste0(basedir, "Spectral_Data/spectral_files_fusarium_asign.csv"))
+meta <- read_csv(paste0(path_to_data, "spectral_files_fusarium_asign.csv"))
 dd <- right_join(meta, spc_pp_o[[1]], by = c("sed_new" = "meas_id")) %>% 
   dplyr::rename("meas_id" = "sed_new")
 
@@ -72,9 +73,89 @@ SVI <- calculate_SVI(data = dd, col_in = "rflt_p3w21m0") %>%
   scale_SVI(plot = F)
 saveRDS(SVI, paste0(basedir, "Spectral_Data/spc_pp.rds"))
 
-# ============================================================================================================= -
+plot_SVI(SVI, col_in = "SVI_sc",
+         x = "meas_date", x_is_date = TRUE, 
+         svi = c("SIPI", "PSRI", "NDVI"), 
+         groups = "Treatment")
+
 # ============================================================================================================= -
 
+
+dd <- data %>% 
+  preprocess_spc(col_in = "rflt_p3w21m0",
+                 p = 0,
+                 binning = 3,
+                 new_col = FALSE)
+
+get_svi_dynamics(SVI, timevar = "dafm")
+
+
+
+# ============================================================================================================= -
+
+parameters <- get_svi_dynamics <- function(data, timevar, method = "interpolate",
+                                           plot = T, topdf = F){
+  
+  # fix variable names
+  names(data)[which(names(data)==timevar)] <- "timevar"
+  
+  # reshape data
+  if(!is.null(data[["SVI_sc"]])){
+    dat_svi <- data.table::rbindlist(data[["SVI_sc"]])
+  } else {
+    stop("Dynamics parameters can only be extracted from scaled SVI values!")
+  }
+  meta <- data[, names(data) %in% c("Plot_ID", "Treatment", "timevar")]
+  dat <- cbind(meta, dat_svi)
+  dat_long <- melt(dat, 
+                   id.vars = c("Plot_ID", "Treatment", "timevar"),
+                   measure.vars = c(grep("^SI_", names(dat), value = T)))
+  
+  # fit parametric model or perform linear interpolation
+  dat_mod <- dat_long %>% 
+    dplyr::group_by(Plot_ID, variable, Treatment) %>% 
+    tidyr::nest()
+  if(method == "interpolate"){
+    fits <- dat_mod %>% 
+      mutate(fit = purrr::map(data, lin_approx, n_meas = 6) %>% purrr::map(cbind.data.frame)) %>% 
+      transmute(pars = purrr::map(fit, extract_pars) %>% purrr::map(cbind.data.frame)) %>% 
+      unnest(pars)
+  } else {
+    stop("Only linear interpolation between measurement timepoints is implemented so far. Specify by setting method = interpolate")
+  }
+  
+  if(plot){
+    
+    dur <- fits %>% dplyr::select(Plot_ID, Treatment, variable, dur1, dur2) %>% 
+      tidyr::gather(param, value, dur1:dur2)
+    
+    tps <- fits %>% dplyr::select(Plot_ID, Treatment, variable, t80:t20) %>% 
+      tidyr::gather(param, value, t80:t20)
+    
+    plot1 <- ggplot(dur) +
+      geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
+      facet_wrap(~variable) +
+      ggsci::scale_fill_npg() +
+      theme_bw(base_size = 7) +
+      theme(panel.grid = element_blank(),
+            panel.background = element_blank())
+    
+    plot2 <- ggplot(tps) +
+      geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
+      facet_wrap(~variable) +
+      ggsci::scale_fill_npg() +
+      theme_bw(base_size = 7) +
+      theme(panel.grid = element_blank(),
+            panel.background = element_blank())
+    
+    plot(plot1)
+    plot(plot2)
+    
+  }
+  
+  return(fits)
+  
+}
 
 
 
