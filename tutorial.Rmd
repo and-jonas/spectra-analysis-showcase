@@ -191,7 +191,8 @@ SVI <- spc_ref %>%
 The function plot_SVI() can be used to visualize results. Through the argument "svi" the a seletion of indices to visualize can be made. The argument "x" is used to specify the 
 
 ```{r, message = FALSE, warning = FALSE, echo=TRUE}
-plot_SVI(SVI, svi = c("SIPI", "PSRI"), col_in = "SVI",
+plot_SVI(SVI, svi = c("SIPI", "PSRI", "NDVI"), 
+         col_in = "SVI",
          x = "meas_date")
 
 ```
@@ -215,5 +216,6 @@ plot_SVI(SVI, svi = c("SIPI", "PSRI", "NDVI"),
 ```
 
 ```{r, message = FALSE, warning = FALSE, echo=TRUE, fig.width=12, fig.height=12}
-parameters <- get_svi_dynamics(data = SVI, timevar = "dafm", plot = T)
+parameters <- get_svi_dynamics(data = SVI, timevar = "dafm", plot = F)
+parameters
 ```

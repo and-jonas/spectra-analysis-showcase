@@ -80,123 +80,13 @@ plot_SVI(SVI, col_in = "SVI_sc",
 
 # ============================================================================================================= -
 
-
 dd <- data %>% 
   preprocess_spc(col_in = "rflt_p3w21m0",
                  p = 0,
                  binning = 3,
                  new_col = FALSE)
 
-get_svi_dynamics(SVI, timevar = "dafm")
-
+parameters <- get_svi_dynamics(SVI, timevar = "dafm")
 
 
 # ============================================================================================================= -
-
-parameters <- get_svi_dynamics <- function(data, timevar, method = "interpolate",
-                                           plot = T, topdf = F){
-  
-  # fix variable names
-  names(data)[which(names(data)==timevar)] <- "timevar"
-  
-  # reshape data
-  if(!is.null(data[["SVI_sc"]])){
-    dat_svi <- data.table::rbindlist(data[["SVI_sc"]])
-  } else {
-    stop("Dynamics parameters can only be extracted from scaled SVI values!")
-  }
-  meta <- data[, names(data) %in% c("Plot_ID", "Treatment", "timevar")]
-  dat <- cbind(meta, dat_svi)
-  dat_long <- melt(dat, 
-                   id.vars = c("Plot_ID", "Treatment", "timevar"),
-                   measure.vars = c(grep("^SI_", names(dat), value = T)))
-  
-  # fit parametric model or perform linear interpolation
-  dat_mod <- dat_long %>% 
-    dplyr::group_by(Plot_ID, variable, Treatment) %>% 
-    tidyr::nest()
-  if(method == "interpolate"){
-    fits <- dat_mod %>% 
-      mutate(fit = purrr::map(data, lin_approx, n_meas = 6) %>% purrr::map(cbind.data.frame)) %>% 
-      transmute(pars = purrr::map(fit, extract_pars) %>% purrr::map(cbind.data.frame)) %>% 
-      unnest(pars)
-  } else {
-    stop("Only linear interpolation between measurement timepoints is implemented so far. Specify by setting method = interpolate")
-  }
-  
-  if(plot){
-    
-    dur <- fits %>% dplyr::select(Plot_ID, Treatment, variable, dur1, dur2) %>% 
-      tidyr::gather(param, value, dur1:dur2)
-    
-    tps <- fits %>% dplyr::select(Plot_ID, Treatment, variable, t80:t20) %>% 
-      tidyr::gather(param, value, t80:t20)
-    
-    plot1 <- ggplot(dur) +
-      geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
-      facet_wrap(~variable) +
-      ggsci::scale_fill_npg() +
-      theme_bw(base_size = 7) +
-      theme(panel.grid = element_blank(),
-            panel.background = element_blank())
-    
-    plot2 <- ggplot(tps) +
-      geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
-      facet_wrap(~variable) +
-      ggsci::scale_fill_npg() +
-      theme_bw(base_size = 7) +
-      theme(panel.grid = element_blank(),
-            panel.background = element_blank())
-    
-    plot(plot1)
-    plot(plot2)
-    
-  }
-  
-  return(fits)
-  
-}
-
-
-
-# add model fits
-dings <- SVI %>% dplyr::select(Plot_ID, Treatment, dafm, SVI_sc) %>% unnest(SVI_sc) %>% 
-  tidyr::gather(SVI, value, starts_with("SI_"))
-
-# add model fits
-data_fits <- dings %>% 
-  group_by(Plot_ID, Treatment, SVI) %>% 
-  # remove plots with incomplete time series
-  nest() %>% 
-  # interpolate linearly between measurement time points 
-  mutate(fit_lin = purrr::map(data, lin_approx, n_meas = 6) %>% purrr::map(cbind.data.frame))
-
-# extract dynamics parameters from nls fits
-dynpars_lin <- data_fits %>% 
-  mutate(pars_lin = purrr::map(fit_lin, extract_pars))
-
-bla <- dynpars_lin %>% dplyr::select(Plot_ID, Treatment, SVI, pars_lin) %>% 
-  mutate(pars_lin = purrr::map(pars_lin, tibble::as_tibble)) %>% 
-  unnest(pars_lin)
-
-dur <- bla %>% dplyr::select(Plot_ID, Treatment, SVI, dur1, dur2) %>% 
-  tidyr::gather(param, value, dur1:dur2)
-
-tps <- bla %>% dplyr::select(Plot_ID, Treatment, SVI, t80:t20) %>% 
-  tidyr::gather(param, value, t80:t20)
-
-plot <- ggplot(dur) +
-  geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
-  facet_wrap(~SVI) +
-  ggsci::scale_fill_npg() +
-  theme_bw() +
-  theme(panel.grid = element_blank(),
-        panel.background = element_blank())
-
-plot <- ggplot(tps) +
-  geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
-  facet_wrap(~SVI) +
-  ggsci::scale_fill_npg() +
-  theme_bw() +
-  theme(panel.grid = element_blank(),
-        panel.background = element_blank())
