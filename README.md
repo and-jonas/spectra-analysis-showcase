@@ -22,7 +22,9 @@ The R-packages `data.table`, `mvoutlier`, `prospectr`, `ggsci` and `tidyverse` a
 `detect_outlier_spectra()` Performs multivariate outlier detection based on robust PCA, using the `mvoutlier::pcout`function; 
 `Calculate_SVI()` Calculates a large number of published spectral vegetation indices; 
 `scale_SVI()` Scales spectral vegetation indices at the plot level to range from 10 to 0, representing the highest and lowest value recorded during a measurement campaign comprising several consecutive measurements over time; 
-`plot_spectra()` Creates plots of spectra or derived data (such as e.g., their derivatives). 
+`plot_spectra()` Creates plots of spectra or derived data (such as e.g., their derivatives);
+`plot_SVI()` Creates plots of spectral vegetation indices; 
+`get_svi_dynamics()`Extracts parameters describing the dynamics of SVI values over time.
 
 ### Example workflow
 
