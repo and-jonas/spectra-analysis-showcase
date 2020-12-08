@@ -1222,6 +1222,51 @@ plot_SVI <- function(data,
   
 }
 
+spectra_cor <- function(data, trait, col_in){
+  
+  # get data
+  cordat <- data[c(trait, col_in)] %>% unnest(col_in) %>% as.data.frame()
+  # trait data
+  traitvector <- as.matrix(as.numeric(cordat[,trait]))
+  # variables with which to correlate
+  variables <- as.matrix(cordat[, -which(names(cordat) == trait)])
+  # calculate correlation coefficient
+  cor_coef <- -(as.vector(cor(traitvector, variables, method = "spearman")))
+  wvlt <- as.numeric(gsub("_", "", stringr::str_sub(names(cordat)[-c(1)], -4, -1)))
+  coefs <- as.data.frame(cbind(wvlt, cor_coef))
+  # add spectral range for plotting
+  coefs <- add_spc_range(coefs)
+  # create plot
+  p1 <- ggplot(coefs) + 
+    geom_line(aes(x = wvlt, y = cor_coef, group = spc_range), size = 0.6) + 
+    xlab(col_in) + ylab("Correlation coefficient") +
+    scale_x_continuous(breaks = seq(0,2500,500), limits = c(350, 2550), expand = c(0.01, 0.01)) +
+    geom_abline(slope = 0, intercept = 0) +
+    theme(axis.line = element_line(colour = "black"),
+          legend.position=c(0.8,0.2),
+          panel.border = element_rect(fill = NA),
+          panel.background = element_blank(),
+          axis.title.y = element_text(size = 15, angle = 90),
+          axis.title.x = element_text(size = 15, angle = 0),
+          axis.text.x = element_text(size = 12.5),
+          axis.text.y = element_text(size = 12.5),
+          legend.text = element_text(size = 12.5),
+          legend.title = element_text(size = 15),
+          plot.title = element_text( size=20, face="bold"))
+  
+  plot(p1)
+  
+  if(topdf){
+    pdf(paste0(path_to_data, "Output/spectra_corr_", col_in,".pdf"))
+    plot(p1)
+    dev.off()
+  }
+  
+  return(coefs)
+  
+}
+
+
 # ============================================================================================================= -
 
 # helper functions ---- 

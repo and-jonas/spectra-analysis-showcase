@@ -15,8 +15,6 @@ knitr::opts_chunk$set(echo = TRUE)
 
 Processing and analysis of hyperspectral data is often performed using commercial software tools such as ENVI or the hyperspectral toolbox in MATLAB. Several R packages are also available for spectral data processing and analysis. Examples include the hyperSpec and hsdar packages. Compared to these, the set of functions presented here is limited in its functionality and therefore not a substitute for them. However, it allows users with minimal experience in spectral data analysis and R programming to implement a few standard steps in spectral data analysis such as signal filtering/pre-processing, visual inspection of the data including effects of treatments and measurement time point, calculation and scaling of spectral vegetation indices and multivariate outlier detection and removal. The functionalities are demonstrated in the following using a spectral dataset collected between 18 May 2020 and July 9 2020 at Agroscope Changins. The aim of the measurements was to evaluate the feasibility of fusarium head blight (FHB) detection and FHB severity quantification using a time series of spectral reflectance measurements on single lines of wheat plants. 
 
-
-
 ## Prepare environment and load data
 
 The below code will prepare your R environment (i.e. install and load the required R packages) 
