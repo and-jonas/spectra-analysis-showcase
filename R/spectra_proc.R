@@ -12,12 +12,16 @@
 #' and finish with the specified file extension, i.e. ".sed" or ".asd". 
 #' All files meeting these criteria are read. 
 #' @export
-load_spectra <- function(dir, format = "sed"){
+load_spectra <- function(dir, subdir = NULL, format = "sed"){
   # print("loading spetra ...")
   # get all subdirectories
   subdirs <- dir(path = dir, full.names = TRUE, recursive = FALSE, pattern = "^[0-9]{8}")
+  # if spectra are stored in subdirectories
+  if(!is.null(subdir)){
+    subdirs <- paste(subdirs, subdir, sep = "/")
+  }
   # get all filenames
-  dirs_spc_files <- list.files(subdirs, pattern = paste0("^[0-9]{4}.*", ".", format), full.names = TRUE)
+  dirs_spc_files <- list.files(subdirs, pattern = paste0("[0-9]{4}.*", ".", format), full.names = TRUE)
   # load spectral data
   data <- dirs_spc_files %>% 
     # read list of files
@@ -955,7 +959,11 @@ get_svi_dynamics <- function(data, timevar, method = "interpolate",
     fits <- dat_mod %>%
       mutate(fit = purrr::map(data, lin_approx, n_meas = 6) %>% purrr::map(cbind.data.frame)) %>%
       transmute(pars = purrr::map(fit, extract_pars) %>% purrr::map(cbind.data.frame)) %>%
-      unnest(pars)
+      unnest(pars) %>% 
+      # to (full) long
+      tidyr::gather(par, value, t80:dur2) %>% 
+      mutate(param = paste(variable, par, sep = "-")) %>% ungroup()  %>%  dplyr::select(-variable, -par) %>% 
+      tidyr::spread(param, value)
   } else {
     stop("Only linear interpolation between measurement timepoints is implemented so far. Specify by setting method = interpolate")
   }
@@ -1275,7 +1283,7 @@ spectra_cor <- function(data, trait, col_in, topdf = F){
 #' @param dir full file name
 #' @param format file extension as a character string, "sed" or "asd"
 #' @return A tibble with measurement_id, measurement date and the spectrum in a data.table
-read_spectrum <- function(dir, format = "sed"){
+read_spectrum <- function(dir, subdir = NULL, format = "sed"){
   if(format == "sed"){
     # read file 
     spc <- data.table::fread(dir, skip = 26)
@@ -1289,12 +1297,23 @@ read_spectrum <- function(dir, format = "sed"){
     l <- str_split(dir, "/") %>% unlist()
     meas_date <- l[length(l)-1]
     # Return spectra as tibble
-    tibble::tibble(
+    t <- tibble::tibble(
       meas_id = filename,
       meas_date = meas_date,
       rflt = list(spct)
     )
-  } else {
+  } else if (format == "asd"){
+    spc <- data.table(prospectr::readASD(dir))
+    # add measurement name and measurement date as identifiers 
+    filename <- base::basename(dir)
+    l <- str_split(dir, "/") %>% unlist()
+    meas_date <- grep("[0-9]{8}$", l, value = TRUE)
+    t <- tibble::tibble(
+      meas_id = filename,
+      meas_date = meas_date,
+      rflt = list(spc)
+    )
+  } else{
     print("data type not recognized!")
   }
 }
@@ -1554,6 +1573,131 @@ perform_rfe <- function(response, base_learner = "ranger", type = "regression",
   return(out)
 }
 
+#Perform recursive feature elimination
+perform_rfe_par <- function(response, base_learner = "ranger", type = "regression",
+                            p = 0.75, times = 30, groups = 9, parallel = T, 
+                            subsets, data,
+                            ...) {
+  
+  #create multifolds for repeated n-fold cross validation
+  index <- caret::createDataPartition(pull(data[response]), p = p, times = times, groups = ifelse(is.numeric(groups), groups, 2))
+  
+  #outer resampling
+  #CV of feature selection
+  `%infix%` <- ifelse(parallel, `%dopar%`, `%do%`)
+  foreach(i=1:length(index)) %infix% {
+    
+    #Verbose
+    print(paste("resample ", i, "/", length(index), sep = ""))
+    
+    #use indices to create train and test data sets for the resample
+    ind <- as.numeric(index[[i]])
+    train <- data[ind,]
+    test <- data[-ind, ]
+    
+    #for each subset of decreasing size
+    #tune/train rf and select variables to retain
+    keep_vars <- drop_vars <- test_perf <- train_perf <- npred <- NULL
+    for(j in 1:length(subsets)){
+      
+      #define new training data
+      #except for first iteration, where the full data set ist used
+      if(exists("newtrain")) {train = newtrain}
+      
+      #Verbose iter
+      print(paste("==> subset size = ", length(train)-1, sep = ""))
+      
+      #define tune grid
+      if(base_learner == "ranger"){
+        #adjust mtry parameter to decreasing predictor set
+        #maximum mtry at 200
+        mtry <- ceiling(seq(1, length(train[-1]), len = 7)) %>% unique()
+        if(any(mtry > 250)){
+          mtry <- mtry[-which(mtry >= 250)]
+        }
+        min.node.size <- c(5)
+        tune_grid <- expand.grid(mtry = mtry,
+                                 splitrule = ifelse(type == "regression", "variance", "gini"),
+                                 min.node.size = ifelse(type == "regression", 5, 1)) 
+      } else if(base_learner == "cubist"){
+        tune_grid <- expand.grid(committees = c(1, 2, 5, 10),
+                                 neighbors = c(0))
+      }
+      
+      #define inner resampling procedure
+      ctrl <- caret::trainControl(method = "repeatedcv",
+                                  number = 10,
+                                  rep = 1,
+                                  verbose = FALSE,
+                                  allowParallel = TRUE,
+                                  savePredictions = TRUE,
+                                  classProbs = ifelse(type == "classification", TRUE, FALSE))
+      
+      #define model to fit
+      formula <- as.formula(paste(response, " ~ .", sep = ""))
+      
+      #tune/train random forest
+      fit <- caret::train(formula,
+                          data = train,
+                          preProc = c("center", "scale"),
+                          method = base_learner,
+                          tuneGrid = tune_grid,
+                          trControl = ctrl,
+                          ...)
+      
+      if(type == "regression"){
+        #extract predobs of each cv fold
+        predobs_cv <- plyr::match_df(fit$pred, fit$bestTune, on = names(fit$bestTune))
+        #Average predictions of the held out samples;
+        predobs <- predobs_cv %>% 
+          group_by(rowIndex) %>% 
+          dplyr::summarize(obs = mean(obs),
+                           mean_pred = mean(pred))
+        #get train performance
+        train_perf[j] <- caret::getTrainPerf(fit)$TrainRMSE
+        #get test performance
+        test_perf[j] <- rmse(test %>% pull(response), caret::predict.train(fit, test))
+      } else if (type == "classification"){
+        #get train accuracy
+        train_perf[j] <- caret::getTrainPerf(fit)$TrainAccuracy
+        #get test accuracy
+        test_perf[j] <- get_acc(fit, test)
+      }
+      
+      #number of preds used
+      npred[[j]] <- length(train)-1
+      
+      #extract retained variables
+      #assign ranks
+      #define reduced training data set
+      if(j < length(subsets)){
+        #extract top variables to keep for next iteration
+        keep_vars[[j]] <- varImp(fit)$importance %>% 
+          tibble::rownames_to_column() %>% 
+          as_tibble() %>% dplyr::rename(var = rowname) %>%
+          arrange(desc(Overall)) %>% slice(1:subsets[j+1]) %>% pull(var)
+        #extract variables dropped from dataset
+        drop_vars[[j]] <- names(train)[!names(train) %in% c(keep_vars[[j]], response)] %>% 
+          tibble::enframe() %>% mutate(rank = length(subsets)-j+1) %>% 
+          dplyr::select(value, rank) %>% dplyr::rename(var = value)
+        #define new training data
+        newtrain <- dplyr::select(train, response, keep_vars[[j]])
+        #last iteration
+      } else {
+        drop_vars[[j]] <- names(train)[names(train) != response] %>% 
+          tibble::enframe() %>% mutate(rank = length(subsets)-j+1) %>% 
+          dplyr::select(value, rank) %>% rename(var = value)
+      }
+    } #END OF FEATURE ELIMINATION ON RESAMPLE i
+    #clean environment 
+    rm("newtrain")
+    #gather results for resample i
+    ranks <- drop_vars %>% do.call("rbind", .)
+    return(list(ranks, train_perf, test_perf, npred))
+  } #END OF OUTER RESAMPLING
+}
+
+
 #' Create a tidy output
 #' @param data The output of perform_rfe, a list of length length(subsets), with each list element a list of 4.
 #' @param base_learner A character string, indicating the base learner used.
@@ -1614,6 +1758,38 @@ plot_perf_profile <- function(data){
           plot.title = element_text(size = 15, face = "bold"),
           strip.text = element_text(face = "bold"))
 }
+
+plot_feature_ranks <- function(data, topdf = F){
+  # order features
+  ranks <- tidy[[2]] %>% tibble::rowid_to_column("order") %>% 
+    mutate(order = as.numeric(1-order))
+  # create plot
+  ranks <- ggplot(ranks, aes(x=order, y=mean)) +
+    geom_point() +
+    geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=0.5) +
+    ylab("Feature rank") +
+    xlab("Feature")+
+    # Add categories to axis
+    scale_x_continuous(
+      breaks = ranks$order,
+      labels = ranks$var,
+      expand = c(0,0)
+    ) +
+    coord_flip() +
+    theme_bw() %+replace%
+    theme(axis.title.y =  element_blank(),
+          plot.title = element_text(size=15, face="bold"),
+          panel.grid.minor = element_blank())
+  plot(ranks)
+  # save to png
+  if(topdf){
+    png(paste0(path_to_data, "Output/feature_ranks.png"), width = 7, height = 8, units = 'in', res = 400)
+    plot(ranks)
+    dev.off()
+  }
+  
+}
+
 
 # ============================================================================================================= -
 
