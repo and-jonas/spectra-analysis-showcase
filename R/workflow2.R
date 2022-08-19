@@ -80,7 +80,8 @@ SVI <- dplyr::rename(SVI, Plot_ID = plot_UID,
 
 SVI <- scale_SVI(SVI, plot = F)
 
-plot_SVI(SVI, svi = c("MCARI2", "FII"),
+plot_SVI(SVI, 
+         svi = c("MCARI2", "FII"),
          col_in = "SVI_sc",
          x = "meas_date",
          x_is_date = TRUE,
@@ -88,7 +89,12 @@ plot_SVI(SVI, svi = c("MCARI2", "FII"),
 
 # ============================================================================================================= -
 
+svi <- c("NDVI_nb_ASD", "MCARI2", "FII", "NDWI1650", "mND705", "780_740",
+         "PSRI", "CARG", "PRI$", "WI_NDVI")
+
+
 parameters <- get_svi_dynamics(data = SVI, 
+                               svi = svi,
                                method = c("linear", "cgom", "pspl"),
                                timevar = "dafm", 
                                plot_dynamics = T)

@@ -940,13 +940,22 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T, topdf = F) {
 #' @param plot Boolean, indicating whether or not to create a plot
 #' @param topdf Boolean, indicating whether or not to save the plot to pdf
 #' @return A tibble containing the dynamics parameters for each Plot and SVI. 
-get_svi_dynamics <- function(data, timevar, method = "interpolate",
+get_svi_dynamics <- function(data, 
+                             svi, 
+                             timevar, method = "interpolate",
                              plot_dynamics = F, 
                              plot = T, topdf = F){
   
+  print(paste("processing", length(svi), "indices ..."))
+  
   # unnest 
   if(!is.null(data[["SVI_sc"]])){
+    # for variable selection
+    pattern <- paste0(svi, collapse = "|")
+    # unnest SVI data
     dat_svi <- data.table::rbindlist(data[["SVI_sc"]])
+    namevec <- grep(pattern = pattern, names(dat_svi), value = T)
+    dat_svi <- dat_svi[, ..namevec]
   } else {
     stop("Dynamics parameters can only be extracted from scaled SVI values!")
   }
