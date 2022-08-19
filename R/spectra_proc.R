@@ -45,6 +45,7 @@ load_spectra <- function(dir, subdir = NULL, format = "sed"){
 #' @return The modified input tibble, with THE overwritten or added output in a list column
 #' @export
 preprocess_spc <- function(data,
+                           average = NULL,
                            p = 3, w = 21, m = 0, 
                            col_in = "rflt", 
                            new_col = FALSE, 
@@ -56,6 +57,11 @@ preprocess_spc <- function(data,
   
   # Convert list of data.tables to one data.table
   spc_raw <- data.table::rbindlist(data[[col_in]])
+  
+  if(!is.null(average)){
+    spc_raw <- setDT(spc_raw)[, as.list(colMeans(.SD)), 
+                              by = as.integer(c(0, rep(1:(nrow(spc_raw)-1)%/%average)))]
+  }
   
   # apply SavitzkyGolay filter to smooth spectra
   if(p != 0){
@@ -100,6 +106,9 @@ preprocess_spc <- function(data,
   }
   
   # replace raw spectra with pre-processed spectra
+  if(!is.null(average)){
+    data <- data[seq(1, nrow(data), average), ]
+  }
   if(new_col == F){
     spc_pp <- data[,-which(colnames(data) == col_in)]
   } else {
@@ -1035,15 +1044,16 @@ plot_spectra <- function(data, col_in = "all", treatment = NULL,
   }
   
   # iterate over data types
-  for (colunm in col_in) {
+  for (column in col_in) {
     
     # reshape data for plotting
-    pd <- data %>% dplyr::select(meas_id, group, treatment, colunm) %>% unnest(c(colunm)) %>% 
+    pd <- data %>% dplyr::select(meas_id, group, Treatment, !!as.symbol(column)) %>% 
+      unnest(c(!!as.symbol(column))) %>% 
       tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
       mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
       add_spc_range()
     
-    otype = paste0("out_", colunm)
+    otype = paste0("out_", column)
     
     ylim1 <-max(pd[pd$wvlt %in% seq(xlim[1], xlim[2], 1),]$rflt)
     ylim2 <- min(pd[pd$wvlt %in% seq(xlim[1], xlim[2], 1),]$rflt)
@@ -1107,7 +1117,7 @@ plot_spectra <- function(data, col_in = "all", treatment = NULL,
         # print("marking outliers ...")
         
         # reshape data for plotting
-        pd_out <- data %>% dplyr::select(meas_id, group, treatment, colunm, otype) %>% unnest(c(colunm)) %>% 
+        pd_out <- data %>% dplyr::select(meas_id, group, treatment, column, otype) %>% unnest(c(column)) %>% 
           tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
           mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
           add_spc_range()
@@ -1133,13 +1143,13 @@ plot_spectra <- function(data, col_in = "all", treatment = NULL,
       # individual spectra
       levels = nrow(unique(pd["group"]))
       width = 10
-      pdf(paste0(path_to_data, "Output/spectra_trt_", colunm,".pdf"), width = width, height = width * (levels/2))
-      # pdf(paste0("C:/Users/anjonas/output/spectra_", colunm,".pdf"), width = width, height = width * (levels/2))
+      pdf(paste0(path_to_data, "Output/spectra_trt_", column,".pdf"), width = width, height = width * (levels/2))
+      # pdf(paste0("C:/Users/anjonas/output/spectra_", column,".pdf"), width = width, height = width * (levels/2))
       plot(plotf)
       dev.off()
       # spectra means
       if(exists("plotmeans")){
-        pdf(paste0(path_to_data, "Output/spectra_means_", colunm,".pdf"), width = width, height = width * (levels/2))
+        pdf(paste0(path_to_data, "Output/spectra_means_", column,".pdf"), width = width, height = width * (levels/2))
         plot(plotmeans)
         dev.off()
       }
