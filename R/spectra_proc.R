@@ -941,6 +941,7 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T, topdf = F) {
 #' @param topdf Boolean, indicating whether or not to save the plot to pdf
 #' @return A tibble containing the dynamics parameters for each Plot and SVI. 
 get_svi_dynamics <- function(data, timevar, method = "interpolate",
+                             plot_dynamics = F, 
                              plot = T, topdf = F){
   
   # unnest 
@@ -956,55 +957,155 @@ get_svi_dynamics <- function(data, timevar, method = "interpolate",
   # reshape
   meta <- data[, names(data) %in% c("Plot_ID", "Treatment", "timevar")]
   dat <- cbind(meta, dat_svi)
-  dat_long <- melt(dat, 
-                   id.vars = c("Plot_ID", "Treatment", "timevar"),
-                   measure.vars = c(grep("^SI_", names(dat), value = T)))
+  dat_long <- reshape2::melt(
+    dat, 
+    id.vars = c("Plot_ID", "Treatment", "timevar"),
+    measure.vars = c(grep("^SI_", names(dat), value = T)))
   
   # fit parametric model or perform linear interpolation
-  dat_mod <- dat_long %>%
+  fits <- dat_long %>%
     dplyr::group_by(Plot_ID, variable, Treatment) %>%
     tidyr::nest()
-  if(method == "interpolate"){
-    fits <- dat_mod %>%
-      mutate(fit = purrr::map(data, lin_approx, n_meas = 6) %>% purrr::map(cbind.data.frame)) %>%
-      transmute(pars = purrr::map(fit, extract_pars) %>% purrr::map(cbind.data.frame)) %>%
-      unnest(pars) %>% 
-      # to (full) long
-      tidyr::gather(par, value, t80:dur2) %>% 
-      mutate(param = paste(variable, par, sep = "-")) %>% ungroup()  %>%  dplyr::select(-variable, -par) %>% 
-      tidyr::spread(param, value)
-  } else {
-    stop("Only linear interpolation between measurement timepoints is implemented so far. Specify by setting method = interpolate")
+  
+  fits <- fits[fits$variable == "SI_760_730",]
+  
+  if("linear" %in% method){
+    
+    print("interpolating ...")
+    
+    fits <- fits %>%
+      mutate(preds_lin = purrr::map(data, .f = lin_approx))
+      # transmute(pars = purrr::map(fit, extract_pars) %>% 
+      #             purrr::map(cbind.data.frame)) %>%
+      # unnest(pars) %>% 
+      # # to (full) long
+      # tidyr::gather(par, value, t80:dur2) %>% 
+      # mutate(param = paste(variable, par, sep = "-")) %>% 
+      # ungroup()  %>%  dplyr::select(-variable, -par) %>% 
+      # tidyr::spread(param, value)
+    
+  }
+  
+  if ("cgom" %in% method){
+    
+    print("fitting cgom ...")
+    
+    fits <- fits %>% 
+      mutate(fit_cgom = purrr::map(data,
+                                   ~ nls_multstart(value ~ Gompertz_constrained(b, M, tempsum = timevar),
+                                                         data = .x, 
+                                                         iter = 750, 
+                                                         start_lower = c(b = -0.2, M = 15),
+                                                         start_upper = c(b = 0.1, M = 25),
+                                                         convergence_count = 150, 
+                                                         supp_errors = "Y")))
+    
+    # new data frame of predictions
+    new_preds <- dat %>% 
+      do(., data.frame(timevar = seq(min(.$timevar), max(.$timevar), 
+                                     length.out = 100), 
+                       stringsAsFactors = FALSE))
+    # max and min for each curve
+    max_min <- group_by(dat, Plot_ID) %>%
+      summarise(., min_gGDDAH = min(timevar), max_gGDDAH = max(timevar)) %>%
+      ungroup()
+    
+    fits <- fits %>%
+      mutate(preds_cgom = purrr::map(fit_cgom, broom::augment, newdata = new_preds)) %>%
+      mutate(preds_cgom = purrr::map(preds_cgom, `$`, .fitted))
+      
+  }
+  
+  if ("pspl" %in% method){
+    
+    print("fitting pspl ...")
+    
+    new_preds <- dat %>% 
+      do(., data.frame(timevar = seq(min(.$timevar), max(.$timevar), 
+                                     length.out = 100), 
+                       stringsAsFactors = FALSE))
+    
+    fits <-  fits %>%
+      mutate(fit_pspl = purrr::map(data, 
+                                   ~p_spline(.x, "timevar", "value")))
+    
+    fits <- fits %>% 
+      mutate(preds_pspl = purrr::map(fit_pspl,
+                                     ~predict_p_spline(., newdata = new_preds)))
+      
+  }
+  
+  if(!any(method %in% c("linear", "pspl", "cgom"))) {
+    stop(paste("interpolation method not supported"))
+  }
+  
+  if (plot_dynamics){
+    
+    print("creating plots")
+    
+    for (var in unique(fits$variable)){
+    
+    # extract data
+    pd <- fits[fits$variable == var, ]
+    obs <- pd[c("Plot_ID", "Treatment", "variable", "data")] %>% unnest(c(data))
+    preds <- pd[c("Plot_ID", "Treatment", "variable", 
+                  grep("preds_", colnames(pd), value = T))] %>% unnest()
+    preds <- cbind(new_preds, preds) %>% as_tibble %>% 
+      tidyr::pivot_longer(., cols = 5:ncol(.), 
+                          names_to = "method", 
+                          values_to = "prediction")
+    # create plot
+    p <- ggplot() +
+      geom_point(aes(timevar, value), shape = 1, obs) +
+      geom_line(aes(timevar, prediction, group = method, colour = method),
+                alpha = 0.75, preds) +
+      facet_wrap(~ Plot_ID, labeller = labeller(.multi_line = FALSE)) +
+      scale_colour_manual(values = c("green4", "black", "red")) +
+      scale_y_continuous(breaks = seq(0,10,2), limits = c(0, 10)) +
+      geom_abline(slope = 0, intercept = 8.5) +
+      geom_abline(slope = 0, intercept = 5.0) +
+      geom_abline(slope = 0, intercept = 1.5) +
+      theme_bw( base_family = "Helvetica") +
+      theme(panel.grid = element_blank()) +
+      ylab("Index value") +
+      xlab("°C days after heading") +
+      ggtitle(var)
+    
+    # save
+    pdf(paste0(path_to_data, "Output/dynamics/", var, ".pdf"), width = 35, height = 35)
+    plot(p)
+    dev.off()
+    }
   }
 
-  if(plot){
-
-    dur <- fits %>% dplyr::select(Plot_ID, Treatment, variable, dur1, dur2) %>%
-      tidyr::gather(param, value, dur1:dur2)
-
-    tps <- fits %>% dplyr::select(Plot_ID, Treatment, variable, t80:t20) %>%
-      tidyr::gather(param, value, t80:t20)
-
-    plot1 <- ggplot(dur) +
-      geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
-      facet_wrap(~variable) +
-      ggsci::scale_fill_npg() +
-      theme_bw(base_size = 7) +
-      theme(panel.grid = element_blank(),
-            panel.background = element_blank())
-
-    plot2 <- ggplot(tps) +
-      geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
-      facet_wrap(~variable) +
-      ggsci::scale_fill_npg() +
-      theme_bw(base_size = 7) +
-      theme(panel.grid = element_blank(),
-            panel.background = element_blank())
-
-    plot(plot1)
-    plot(plot2)
-
-  }
+  # if(plot){
+  # 
+  #   dur <- fits %>% dplyr::select(Plot_ID, Treatment, variable, dur1, dur2) %>%
+  #     tidyr::gather(param, value, dur1:dur2)
+  # 
+  #   tps <- fits %>% dplyr::select(Plot_ID, Treatment, variable, t80:t20) %>%
+  #     tidyr::gather(param, value, t80:t20)
+  # 
+  #   plot1 <- ggplot(dur) +
+  #     geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
+  #     facet_wrap(~variable) +
+  #     ggsci::scale_fill_npg() +
+  #     theme_bw(base_size = 7) +
+  #     theme(panel.grid = element_blank(),
+  #           panel.background = element_blank())
+  # 
+  #   plot2 <- ggplot(tps) +
+  #     geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
+  #     facet_wrap(~variable) +
+  #     ggsci::scale_fill_npg() +
+  #     theme_bw(base_size = 7) +
+  #     theme(panel.grid = element_blank(),
+  #           panel.background = element_blank())
+  # 
+  #   plot(plot1)
+  #   plot(plot2)
+  # 
+  # }
 
   return(fits)
 
@@ -1416,24 +1517,48 @@ col_scaling <- function(d) {
   return(out)
 }
 
-lin_approx <- function(data, n_meas){
+lin_approx <- function(data){
   
   data <- as.data.frame(data)
   
   # linearly interpolate between measurement time points
-  out <- approx(data[, "timevar"], data[,"value"],
-                xout = seq(round(min(data[, "timevar"], na.rm = TRUE), 0),
-                           round(max(data[, "timevar"], na.rm = TRUE), 0), 1))
-  names(out) <- c("timevar", ".fitted")
-  
+  preds <- approx(data[, "timevar"], data[,"value"],
+                xout = seq(min(data$timevar), max(data$timevar), 
+                           length.out = 100))$y
+
   # check that time series is complete
   # and first measurement is larger than the critical value for onset
   n <- nrow(data)
   init <- data[1,2]
-  if(n < n_meas || init <= 8){
-    out$.fitted <- rep(NA, length(out["timevar"]))
+  if(init <= 8){
+    preds <- rep(NA, 100)
   }
-  return(out)
+  return(preds)
+}
+
+Gompertz_constrained <- function(b, M, tempsum) {
+  grenness_decay <- 10*exp(-exp(-b*(tempsum-M)))
+  return(grenness_decay)
+}
+
+p_spline <- function(data, x_name, y_name) {
+
+  y <- data[[y_name]]
+  x <- data[[x_name]]
+  spl <- scam(y ~ s(x, k = round(length(x) * 3/4), bs = "mpd"),
+              optimizer = "bfgs")
+       
+  return(spl)
+  
+}
+
+predict_p_spline <- function(spl, newdata) {
+  
+  names(newdata) <- "x"
+  preds <- predict.scam(spl, newdata = newdata)
+  
+  return(preds)
+  
 }
 
 extract_pars <- function(data){
