@@ -1190,9 +1190,11 @@ plot_SVI <- function(data,
   meta <- data[, !grepl("^rflt|^SVI", names(SVI))]
   dat <- cbind(meta, dat_svi)
   # reshape for plotting
-  dat_long <- melt(dat, 
-                   id.vars = c("Plot_ID", "meas_date", "Treatment"),
-                   measure.vars = c(grep("^SI_", names(dat), value = T)))
+  dat_long <- reshape2::melt(
+    dat, 
+    id.vars = c("Plot_ID", "meas_date", "Treatment"),
+    measure.vars = c(grep("^SI_", names(dat), value = T))
+    )
   
   # fix variable names
   if(!is.null(groups)){
