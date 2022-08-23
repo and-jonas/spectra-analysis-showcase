@@ -214,7 +214,7 @@ calculate_SVI <- function(data, col_in, new_col = T) {
   
   d <- data.table::rbindlist(data[[col_in]]) %>% tibble::as_tibble()
   
-  # BANDS ########################################################################## -
+  # BANDS ====================================================================== -
   ALI5 <- rowMeans(d[775:805])
   ALI6 <- rowMeans(d[ ,match(845:890, colnames(d))])
   ALI7 <- rowMeans(d[ ,match(1200:1300, colnames(d))])
@@ -420,7 +420,7 @@ calculate_SVI <- function(data, col_in, new_col = T) {
   G <- rowMeans(d[ ,match(545:555, colnames(d))])
   B <- rowMeans(d[ ,match(495:505, colnames(d))])
   
-  # INDICES ########################################################################## -
+  # INDICES ==================================================================== -
   
   #ARVI
   SI_ARVI <- (Rn_1-(Rr_1-Rb_1+Rr_1))/(Rn_1+(Rr_1-Rb_1+Rr_1)) #with gamma equals 1 here
@@ -822,7 +822,7 @@ calculate_SVI <- function(data, col_in, new_col = T) {
   #GCC
   SI_GCC_HA <- G/(R + G + B)
   
-  # CREATE TIBBLE ########################################################################## -
+  # CREATE TIBBLE ============================================================== -
   
   DF <- do.call(cbind.data.frame, mget(ls(pattern = "SI_"))) %>% tibble::as_tibble()
   
@@ -944,15 +944,17 @@ get_svi_dynamics <- function(data,
                              svi, 
                              timevar, method = "interpolate",
                              plot_dynamics = F, 
-                             plot = T, topdf = F){
+                             plot_parameters = F){
   
   print(paste("processing", length(svi), "indices ..."))
   
-  # unnest 
+  # prepare data =============================================================== -
+  
+  # un-nest 
   if(!is.null(data[["SVI_sc"]])){
     # for variable selection
     pattern <- paste0(svi, collapse = "|")
-    # unnest SVI data
+    # un-nest SVI data
     dat_svi <- data.table::rbindlist(data[["SVI_sc"]])
     namevec <- grep(pattern = pattern, names(dat_svi), value = T)
     dat_svi <- dat_svi[, ..namevec]
@@ -964,41 +966,46 @@ get_svi_dynamics <- function(data,
   names(data)[which(names(data)==timevar)] <- "timevar"
   
   # reshape
-  meta <- data[, names(data) %in% c("Plot_ID", "Treatment", "timevar")]
+  meta <- data[, names(data) %in% c("Plot_ID", "Treatment", "timevar", "gen_name")]
   dat <- cbind(meta, dat_svi)
   dat_long <- reshape2::melt(
     dat, 
-    id.vars = c("Plot_ID", "Treatment", "timevar"),
+    id.vars = c("Plot_ID", "Treatment", "timevar", "gen_name"),
     measure.vars = c(grep("^SI_", names(dat), value = T)))
   
-  # fit parametric model or perform linear interpolation
+  # fit models ================================================================= -
+  
+  # group data
   fits <- dat_long %>%
-    dplyr::group_by(Plot_ID, variable, Treatment) %>%
+    dplyr::group_by(Plot_ID, variable, Treatment, gen_name) %>%
     tidyr::nest()
   
-  fits <- fits[fits$variable == "SI_760_730",]
-  
+  # perform linear interpolations
   if("linear" %in% method){
     
     print("interpolating ...")
     
+    # get linear interpolations
     fits <- fits %>%
       mutate(preds_lin = purrr::map(data, .f = lin_approx))
-      # transmute(pars = purrr::map(fit, extract_pars) %>% 
-      #             purrr::map(cbind.data.frame)) %>%
-      # unnest(pars) %>% 
-      # # to (full) long
-      # tidyr::gather(par, value, t80:dur2) %>% 
-      # mutate(param = paste(variable, par, sep = "-")) %>% 
-      # ungroup()  %>%  dplyr::select(-variable, -par) %>% 
-      # tidyr::spread(param, value)
-    
+
   }
   
+  # get x-values for model predictions
+  if(any(method %in% c( "pspl", "cgom"))){
+    new_preds <- dat %>% 
+      do(., data.frame(
+        timevar = seq(min(.$timevar), max(.$timevar), length.out = 100),
+        stringsAsFactors = FALSE)
+        )
+  }
+
+  # Fit Gompertz models
   if ("cgom" %in% method){
     
     print("fitting cgom ...")
     
+    # fit Gompertz models
     fits <- fits %>% 
       mutate(fit_cgom = purrr::map(data,
                                    ~ nls_multstart(value ~ Gompertz_constrained(b, M, tempsum = timevar),
@@ -1009,35 +1016,26 @@ get_svi_dynamics <- function(data,
                                                          convergence_count = 150, 
                                                          supp_errors = "Y")))
     
-    # new data frame of predictions
-    new_preds <- dat %>% 
-      do(., data.frame(timevar = seq(min(.$timevar), max(.$timevar), 
-                                     length.out = 100), 
-                       stringsAsFactors = FALSE))
     # max and min for each curve
     max_min <- group_by(dat, Plot_ID) %>%
       summarise(., min_gGDDAH = min(timevar), max_gGDDAH = max(timevar)) %>%
       ungroup()
-    
+    # get predictions
     fits <- fits %>%
-      mutate(preds_cgom = purrr::map(fit_cgom, broom::augment, newdata = new_preds)) %>%
-      mutate(preds_cgom = purrr::map(preds_cgom, `$`, .fitted))
-      
+      mutate(preds_cgom = purrr::map(fit_cgom, broom::augment, newdata = new_preds))
   }
   
+  # Fit p-splines
   if ("pspl" %in% method){
     
     print("fitting pspl ...")
-    
-    new_preds <- dat %>% 
-      do(., data.frame(timevar = seq(min(.$timevar), max(.$timevar), 
-                                     length.out = 100), 
-                       stringsAsFactors = FALSE))
-    
+
+    # fit splines
     fits <-  fits %>%
       mutate(fit_pspl = purrr::map(data, 
                                    ~p_spline(.x, "timevar", "value")))
     
+    # make predictions
     fits <- fits %>% 
       mutate(preds_pspl = purrr::map(fit_pspl,
                                      ~predict_p_spline(., newdata = new_preds)))
@@ -1048,76 +1046,171 @@ get_svi_dynamics <- function(data,
     stop(paste("interpolation method not supported"))
   }
   
+  # Extract model parameters =================================================== -
+  
+  mod_pars <- fits
+  
+  if ("interpolation" %in% method){
+    mod_pars <- mod_pars %>% 
+      mutate(pars_lin = purrr::map(preds_lin, extract_pars) %>% 
+               purrr::map(cbind.data.frame))
+  }
+  if ("cgom" %in% method){
+    mod_pars <- mod_pars %>%
+      mutate(pars_cgom = purrr::map(fit_cgom, broom::tidy)) %>% 
+      mutate(pars_cgom = purrr::map(pars_cgom, tidy_gompertz_output))
+  }
+  if ("pspl" %in% method){
+    mod_pars <- mod_pars %>%
+      mutate(pars_pspl = purrr::map(preds_pspl, extract_pars) %>% 
+               purrr::map(cbind.data.frame))
+  }
+  
+  # Plot fits ================================================================== -
+  
   if (plot_dynamics){
     
-    print("creating plots")
-    
-    for (var in unique(fits$variable)){
+    print("creating plots ...")
     
     # extract data
-    pd <- fits[fits$variable == var, ]
-    obs <- pd[c("Plot_ID", "Treatment", "variable", "data")] %>% unnest(c(data))
-    preds <- pd[c("Plot_ID", "Treatment", "variable", 
-                  grep("preds_", colnames(pd), value = T))] %>% unnest()
+    preds <- fits[c("Plot_ID", "Treatment", "variable", "gen_name",
+                  grep("preds_", colnames(fits), value = T))] %>% unnest()
     preds <- cbind(new_preds, preds) %>% as_tibble %>% 
-      tidyr::pivot_longer(., cols = 5:ncol(.), 
+      tidyr::pivot_longer(., cols = 6:ncol(.), 
                           names_to = "method", 
-                          values_to = "prediction")
-    # create plot
-    p <- ggplot() +
-      geom_point(aes(timevar, value), shape = 1, obs) +
-      geom_line(aes(timevar, prediction, group = method, colour = method),
-                alpha = 0.75, preds) +
-      facet_wrap(~ Plot_ID, labeller = labeller(.multi_line = FALSE)) +
+                          values_to = "prediction") %>% 
+      mutate(method = gsub("preds_", "", method))
+
+    # basic plot layout
+    p0 <- ggplot() +
       scale_colour_manual(values = c("green4", "black", "red")) +
-      scale_y_continuous(breaks = seq(0,10,2), limits = c(0, 10)) +
+      scale_fill_manual(values = c("green4", "black", "red")) +
+      scale_y_continuous(breaks = seq(0,10,2), limits = c(-.5, 10.5)) +
       geom_abline(slope = 0, intercept = 8.5) +
       geom_abline(slope = 0, intercept = 5.0) +
       geom_abline(slope = 0, intercept = 1.5) +
       theme_bw( base_family = "Helvetica") +
       theme(panel.grid = element_blank()) +
       ylab("Index value") +
-      xlab("°C days after heading") +
-      ggtitle(var)
+      xlab(timevar)
     
-    # save
-    pdf(paste0(path_to_data, "Output/dynamics/", var, ".pdf"), width = 35, height = 35)
-    plot(p)
-    dev.off()
+    # genotype-wise plots ====================================================== -
+    
+    # empty lists for plots
+    reps_list = list()
+    treats_list = list()
+    
+    # loop over genotypes
+    for (gen in unique(preds$gen_name)){
+      
+      # loop over interpolation methods
+      for (met in unique(preds$method)){
+        
+        plot_id <- paste(gen, met, sep = "_")
+      
+        pd <- preds[preds$gen_name == gen & preds$method == met,]
+      
+        pd_means <- pd %>% 
+          group_by(method, gen_name, Treatment, variable, timevar) %>% 
+          summarise(mean_pred = mean(prediction),
+                    sd_pred = sd(prediction)) %>% 
+          # if NA, must be replaced with 0 for correct plotting
+          mutate(sd_pred = ifelse(is.na(sd_pred), 0, sd_pred))
+        
+  
+        # plot data for individual plots
+        reps_list[[plot_id]] <- p0 +
+          geom_line(aes(timevar, prediction, group = interaction(Treatment, Plot_ID), colour = Treatment),
+                    alpha = 0.75, pd) +
+          facet_wrap(~ variable, labeller = labeller(.multi_line = FALSE)) +
+          ggtitle(plot_id)
+  
+        # plot data per treatment
+        treats_list[[plot_id]] <- p0 + 
+          geom_line(aes(timevar, mean_pred, group = Treatment, colour = Treatment),
+                    alpha = 0.75, pd_means) +
+          geom_ribbon(aes(x = timevar, ymin = mean_pred - sd_pred,
+                          ymax = mean_pred + sd_pred,
+                          fill = Treatment,
+                          group = Treatment), alpha = 0.25, pd_means) +
+          facet_wrap(~variable, labeller = labeller(.multi_line = FALSE)) +
+          ggtitle(plot_id)
+          
+      } # end method loop
+
+    } # end genotype loop
+    
+    # save plots to pdf 
+    pdf(paste0(path_to_data, "Output/dynamics/gen_reps.pdf"), width = 15, height = 12)
+    for (i in 1:length(reps_list)){
+      plot(reps_list[[i]])
     }
+    dev.off()
+    pdf(paste0(path_to_data, "Output/dynamics/gen_treats.pdf"), width = 15, height = 12)
+    for (i in 1:length(reps_list)){
+      plot(treats_list[[i]])
+    }
+    dev.off()
+    
+    # plot-wise plots including raw data points ================================ -
+    
+    for (var in unique(fits$variable)){
+      
+      # extract data
+      pd <- fits[fits$variable == var, ]
+      obs <- pd[c("Plot_ID", "Treatment", "variable", "data")] %>% unnest(c(data))
+      preds <- pd[c("Plot_ID", "Treatment", "variable", 
+                    grep("preds_", colnames(pd), value = T))] %>% unnest()
+      preds <- cbind(new_preds, preds) %>% as_tibble %>% 
+        tidyr::pivot_longer(., cols = 5:ncol(.), 
+                            names_to = "method", 
+                            values_to = "prediction")
+      # create plot
+      p <- p0 +
+        geom_point(aes(timevar, value), shape = 1, obs) +
+        geom_line(aes(timevar, prediction, group = method, colour = method),
+                  alpha = 0.75, preds) +
+        facet_wrap(~Plot_ID, labeller = labeller(.multi_line = FALSE)) +
+        ggtitle(var)
+      
+      # save to pdf
+      pdf(paste0(path_to_data, "Output/dynamics/", var, ".pdf"), width = 35, height = 35)
+      plot(p)
+      dev.off()
+      }
   }
+  
+  # create a tidy output tibble holding parameter values ======================= -
+  
+  parameters <- mod_pars[c("Plot_ID", "Treatment", "gen_name", "variable",
+                           grep("pars_", colnames(mod_pars), value = T))] %>% 
+    unnest(grep("pars_", names(.)), names_sep = "_")
+  
+  names(parameters) <- gsub("pars_", "", names(parameters))
+  
+  # End of function ============================================================ -
 
-  # if(plot){
-  # 
-  #   dur <- fits %>% dplyr::select(Plot_ID, Treatment, variable, dur1, dur2) %>%
-  #     tidyr::gather(param, value, dur1:dur2)
-  # 
-  #   tps <- fits %>% dplyr::select(Plot_ID, Treatment, variable, t80:t20) %>%
-  #     tidyr::gather(param, value, t80:t20)
-  # 
-  #   plot1 <- ggplot(dur) +
-  #     geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
-  #     facet_wrap(~variable) +
-  #     ggsci::scale_fill_npg() +
-  #     theme_bw(base_size = 7) +
-  #     theme(panel.grid = element_blank(),
-  #           panel.background = element_blank())
-  # 
-  #   plot2 <- ggplot(tps) +
-  #     geom_boxplot(aes(x = param, y = value, group = interaction(param, Treatment), fill = Treatment)) +
-  #     facet_wrap(~variable) +
-  #     ggsci::scale_fill_npg() +
-  #     theme_bw(base_size = 7) +
-  #     theme(panel.grid = element_blank(),
-  #           panel.background = element_blank())
-  # 
-  #   plot(plot1)
-  #   plot(plot2)
-  # 
-  # }
+  return(list(fits, parameters))
 
-  return(fits)
+}
 
+# in progress
+plot_parameters <- function(data){
+  
+  pd <- data %>% pivot_longer(cols = 5:length(.),
+                                    names_to = "parameter", 
+                                    values_to = "value")
+  pd$method <- strsplit(pd$parameter, "_") %>% lapply("[[", 1) %>% unlist()
+  pd$parameter <- strsplit(pd$parameter, "_") %>% lapply("[[", 2) %>% unlist()
+  
+  p1 <- ggplot(pd) +
+    geom_boxplot(aes(x = Treatment, y = value)) +
+    facet_wrap(~interaction(parameter, method), scales = "free") +
+    theme_bw(base_family = "Helvetica") +
+    theme(panel.grid = element_blank()) +
+    ylab("Index value") +
+    xlab(timevar)
+  
 }
 
 #' Plots reflectance spectra and pre-processing products
@@ -1533,14 +1626,18 @@ lin_approx <- function(data){
   # linearly interpolate between measurement time points
   preds <- approx(data[, "timevar"], data[,"value"],
                 xout = seq(min(data$timevar), max(data$timevar), 
-                           length.out = 100))$y
+                           length.out = 100))
+  
+  preds <- tibble(timevar = preds$x, .fitted = preds$y)
 
   # check that time series is complete
   # and first measurement is larger than the critical value for onset
   n <- nrow(data)
   init <- data[1,2]
   if(init <= 8){
-    preds <- rep(NA, 100)
+    preds <- tibble(timevar = seq(min(data$timevar), max(data$timevar), 
+                                  length.out = 100), 
+                    .fitted = rep(NA, 100))
   }
   return(preds)
 }
@@ -1565,19 +1662,32 @@ predict_p_spline <- function(spl, newdata) {
   
   names(newdata) <- "x"
   preds <- predict.scam(spl, newdata = newdata)
+  preds <- tibble(timevar = newdata$x, .fitted = preds)
   
   return(preds)
   
 }
 
 extract_pars <- function(data){
-  t80 <- data[which(data[".fitted"] < 8)[1], "timevar"]
-  t50 <- data[which(data[".fitted"] < 5)[1], "timevar"]
-  t20 <- data[which(data[".fitted"] < 2)[1], "timevar"]
+  
+  t80 <- data[which(data[".fitted"] < 8)[1], "timevar"]$timevar
+  t50 <- data[which(data[".fitted"] < 5)[1], "timevar"]$timevar
+  t20 <- data[which(data[".fitted"] < 2)[1], "timevar"]$timevar
   dur1 <- t50 - t80
   dur2 <- t20 - t80
   pars <- cbind(t80, t50, t20, dur1, dur2)
+  
   return(pars)
+  
+}
+
+tidy_gompertz_output <- function(data){
+  
+  out <- data[,c("term", "estimate")] %>% 
+    tidyr::spread(term, estimate)
+  
+  return(out)
+  
 }
 
 # ============================================================================================================= -
