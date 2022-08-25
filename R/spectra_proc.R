@@ -850,11 +850,14 @@ calculate_SVI <- function(data, col_in, new_col = T) {
 #' @param plotid The variable name of the plot identifier
 #' @return A tibble with list columns
 #' @details This function reverts the scale for SVI with an increase during the measurement period
-scale_SVI <- function(data, plotid = "Plot_ID", plot = T, topdf = F) {
+scale_SVI <- function(data, plotid, treatid,  
+                      plot = T, topdf = F) {
   
-  # fix plot identifier 
+  # fix identifiers
   colid <- which(names(data)==plotid)
   names(data)[colid] <- "Plot_ID"
+  colid <- which(names(data)==treatid)
+  names(data)[colid] <- "Treatment"
   
   # keep only plots with measurements covering the entire measurement period
   # get start and end date
@@ -865,7 +868,7 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T, topdf = F) {
   data$dafm <- as.numeric(as.Date(data$meas_date, "%Y%m%d") - as.Date(min_date, "%Y%m%d"))
   
   # extract SVI from list column and add required metadata
-  meta <- data[c(plotid, "meas_date", "dafm", "Treatment")]
+  meta <- data[c("Plot_ID", "meas_date", "dafm", "Treatment")]
   SVI_dat <- data.table::rbindlist(data[["SVI"]])
   d <- cbind(meta, SVI_dat)
   
@@ -886,7 +889,7 @@ scale_SVI <- function(data, plotid = "Plot_ID", plot = T, topdf = F) {
   ids <- d_scaled[c("Plot_ID", "meas_date", "dafm", "Treatment")] %>% ungroup()
   SVI_sc_dat <- d_scaled[grepl("^SI_", names(d_scaled))]
   SVI_sc_dat <- SVI_sc_dat %>% 
-    mutate_all(funs(r = revert)) %>% 
+    mutate_all(list(r = revert)) %>% 
     #select original or reversed values
     dplyr::select_if(function(col) col[1] > 5) %>% 
     data.table::as.data.table()
@@ -948,7 +951,9 @@ get_svi_dynamics <- function(data,
   
   print(paste("processing", length(svi), "indices ..."))
   
-  # prepare data =============================================================== -
+  # ============================================================================ -
+  # prepare data 
+  # ============================================================================ -
   
   # un-nest 
   if(!is.null(data[["SVI_sc"]])){
@@ -973,17 +978,21 @@ get_svi_dynamics <- function(data,
     id.vars = c("Plot_ID", "Treatment", "timevar", "gen_name"),
     measure.vars = c(grep("^SI_", names(dat), value = T)))
   
-  # fit models ================================================================= -
+  # ============================================================================ -
+  # fit models
+  # ============================================================================ -
   
   # group data
   fits <- dat_long %>%
     dplyr::group_by(Plot_ID, variable, Treatment, gen_name) %>%
     tidyr::nest()
   
+  fits <- fits[1:10, ]
+  
   # perform linear interpolations
   if("linear" %in% method){
     
-    print("interpolating ...")
+    print(" -- Interpolating ...")
     
     # get linear interpolations
     fits <- fits %>%
@@ -991,19 +1000,17 @@ get_svi_dynamics <- function(data,
 
   }
   
-  # get x-values for model predictions
-  if(any(method %in% c( "pspl", "cgom"))){
-    new_preds <- dat %>% 
-      do(., data.frame(
-        timevar = seq(min(.$timevar), max(.$timevar), length.out = 100),
-        stringsAsFactors = FALSE)
-        )
-  }
+  # df for predictions
+  new_preds <- dat %>% 
+    do(., data.frame(
+      timevar = seq(min(.$timevar), max(.$timevar), length.out = 100),
+      stringsAsFactors = FALSE)
+      )
 
   # Fit Gompertz models
   if ("cgom" %in% method){
     
-    print("fitting cgom ...")
+    print(" -- Fitting constrained Gompertz ...")
     
     # fit Gompertz models
     fits <- fits %>% 
@@ -1022,13 +1029,14 @@ get_svi_dynamics <- function(data,
       ungroup()
     # get predictions
     fits <- fits %>%
-      mutate(preds_cgom = purrr::map(fit_cgom, broom::augment, newdata = new_preds))
+      mutate(preds_cgom = purrr::map(fit_cgom, broom::augment, newdata = new_preds)) %>% 
+      mutate(preds_cgom = purrr::map(preds_cgom, tidy_gompertz_preds))
   }
   
   # Fit p-splines
   if ("pspl" %in% method){
     
-    print("fitting pspl ...")
+    print(" -- Fitting p-splines ...")
 
     # fit splines
     fits <-  fits %>%
@@ -1046,7 +1054,9 @@ get_svi_dynamics <- function(data,
     stop(paste("interpolation method not supported"))
   }
   
-  # Extract model parameters =================================================== -
+  # ============================================================================ -
+  # Extract model parameters 
+  # ============================================================================ -
   
   mod_pars <- fits
   
@@ -1058,7 +1068,9 @@ get_svi_dynamics <- function(data,
   if ("cgom" %in% method){
     mod_pars <- mod_pars %>%
       mutate(pars_cgom = purrr::map(fit_cgom, broom::tidy)) %>% 
-      mutate(pars_cgom = purrr::map(pars_cgom, tidy_gompertz_output))
+      mutate(pars_cgom = purrr::map(pars_cgom, tidy_gompertz_output)) %>% 
+      mutate(pars2_cgom = purrr::map(preds_cgom, extract_pars) %>% 
+               purrr::map(cbind.data.frame))
   }
   if ("pspl" %in% method){
     mod_pars <- mod_pars %>%
@@ -1066,15 +1078,18 @@ get_svi_dynamics <- function(data,
                purrr::map(cbind.data.frame))
   }
   
-  # Plot fits ================================================================== -
+  # ============================================================================ -
+  # Plot fits
+  # ============================================================================ -
   
   if (plot_dynamics){
     
-    print("creating plots ...")
+    print(" -- creating plots ...")
     
     # extract data
     preds <- fits[c("Plot_ID", "Treatment", "variable", "gen_name",
-                  grep("preds_", colnames(fits), value = T))] %>% unnest()
+                  grep("preds_", colnames(fits), value = T))] %>% 
+      unnest(names_sep = "_")
     preds <- cbind(new_preds, preds) %>% as_tibble %>% 
       tidyr::pivot_longer(., cols = 6:ncol(.), 
                           names_to = "method", 
@@ -1180,16 +1195,18 @@ get_svi_dynamics <- function(data,
       }
   }
   
-  # create a tidy output tibble holding parameter values ======================= -
+  # ============================================================================ -
+  # create a tidy output tibble holding parameter values
+  # ============================================================================ -
   
   parameters <- mod_pars[c("Plot_ID", "Treatment", "gen_name", "variable",
                            grep("pars_", colnames(mod_pars), value = T))] %>% 
-    unnest(grep("pars_", names(.)), names_sep = "_")
+    unnest(grep("pars_|pars2_", names(.)), names_sep = "_")
   
-  names(parameters) <- gsub("pars_", "", names(parameters))
+  names(parameters) <- gsub("pars_|pars_timepoints", "", names(parameters))
   
-  # End of function ============================================================ -
-
+  # ============================================================================ -
+  
   return(list(fits, parameters))
 
 }
@@ -1628,16 +1645,14 @@ lin_approx <- function(data){
                 xout = seq(min(data$timevar), max(data$timevar), 
                            length.out = 100))
   
-  preds <- tibble(timevar = preds$x, .fitted = preds$y)
+  preds <- tibble(preds_lin = preds$y)
 
   # check that time series is complete
   # and first measurement is larger than the critical value for onset
   n <- nrow(data)
   init <- data[1,2]
   if(init <= 8){
-    preds <- tibble(timevar = seq(min(data$timevar), max(data$timevar), 
-                                  length.out = 100), 
-                    .fitted = rep(NA, 100))
+    preds <- tibble(preds_lin = rep(NA, 100))
   }
   return(preds)
 }
@@ -1658,27 +1673,40 @@ p_spline <- function(data, x_name, y_name) {
   
 }
 
-predict_p_spline <- function(spl, newdata) {
+predict_p_spline <- function(spl, newdata = new_preds) {
   
   names(newdata) <- "x"
   preds <- predict.scam(spl, newdata = newdata)
-  preds <- tibble(timevar = newdata$x, .fitted = preds)
-  
+  preds <- tibble(preds_pspl = unname(preds))
+
   return(preds)
   
 }
 
 extract_pars <- function(data){
   
-  t80 <- data[which(data[".fitted"] < 8)[1], "timevar"]$timevar
-  t50 <- data[which(data[".fitted"] < 5)[1], "timevar"]$timevar
-  t20 <- data[which(data[".fitted"] < 2)[1], "timevar"]$timevar
+  # find method predictions column name
+  colid <- grep("^preds_", names(data), value = T)
+  # add the time frame of predictions
+  data <- bind_cols(data, new_preds)
+  
+  # extract parameters
+  t80 <- data[which(data[[colid]] < 8)[1], "timevar"]$timevar
+  t50 <- data[which(data[[colid]] < 5)[1], "timevar"]$timevar
+  t20 <- data[which(data[[colid]] < 2)[1], "timevar"]$timevar
   dur1 <- t50 - t80
   dur2 <- t20 - t80
   pars <- cbind(t80, t50, t20, dur1, dur2)
   
   return(pars)
   
+}
+
+tidy_gompertz_preds <- function(data){
+  
+  out <- tibble(preds_cgom = data$.fitted)
+  
+  return(out)
 }
 
 tidy_gompertz_output <- function(data){
