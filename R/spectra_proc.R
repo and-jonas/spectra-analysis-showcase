@@ -7,26 +7,26 @@
 #' @param dir Directory to read files from
 #' @param format file extension as a character string, "sed" or "asd"
 #' @return A tibble with measurement_id, measurement date and spectra in a list column of data.tables
-#' @details Files tp read must be stored in subfolders with measurement dates as folder names, e.g. "20200709"
+#' @details Files tp read must be stored in sub-folders with measurement dates as folder names, e.g. "20200709"
 #' File names must start with a four digit number indicating the year of measurement 
 #' and finish with the specified file extension, i.e. ".sed" or ".asd". 
 #' All files meeting these criteria are read. 
 #' @export
 load_spectra <- function(dir, subdir = NULL, format = "sed"){
-  # print("loading spetra ...")
-  # get all subdirectories
+  # print("loading spectra ...")
+  # get all sub-directories
   subdirs <- dir(path = dir, full.names = TRUE, recursive = FALSE, pattern = "^[0-9]{8}")
-  # if spectra are stored in subdirectories
+  # if spectra are stored in sub-directories
   if(!is.null(subdir)){
     subdirs <- paste(subdirs, subdir, sep = "/")
   }
-  # get all filenames
+  # get all file names
   dirs_spc_files <- list.files(subdirs, pattern = paste0("[0-9]{4}.*", ".", format), full.names = TRUE)
   # load spectral data
   data <- dirs_spc_files %>% 
     # read list of files
     lapply(., read_spectrum, format = format) %>% 
-    # bind to tible
+    # bind to tibble
     data.table::rbindlist(.,) %>% tibble::as_tibble()
   # print("done")
   return(data)
@@ -987,8 +987,6 @@ get_svi_dynamics <- function(data,
     dplyr::group_by(Plot_ID, variable, Treatment, gen_name) %>%
     tidyr::nest()
   
-  fits <- fits[1:10, ]
-  
   # perform linear interpolations
   if("linear" %in% method){
     
@@ -1239,13 +1237,16 @@ plot_parameters <- function(data){
 #' @param mark_outliers Boolean, whether or not to mark multivariate outliers
 #' @param topdf Boolean, whether or not to save the plot as a pdf
 #' @return A ggplot object
-plot_spectra <- function(data, col_in = "all", treatment = NULL,
+plot_spectra <- function(data, col_in = "all", 
+                         treatment = NULL,
                          xlim = c(350, 2500),
                          facets = NULL,
                          mark_outliers = FALSE,
                          topdf = FALSE){
   
   # print("plotting spectra ...")
+  
+  if (exists("plotmeans")){rm(plotmeans)}
   
   if("all" %in% col_in){
     col_in <- grep("^rflt_", names(data), value = TRUE)
@@ -1267,7 +1268,7 @@ plot_spectra <- function(data, col_in = "all", treatment = NULL,
   for (column in col_in) {
     
     # reshape data for plotting
-    pd <- data %>% dplyr::select(meas_id, group, Treatment, !!as.symbol(column)) %>% 
+    pd <- data %>% dplyr::select(matches(paste(c("meas_id", "group", "Treatment", column), collapse = "|"))) %>% 
       unnest(c(!!as.symbol(column))) %>% 
       tidyr::gather(wvlt, rflt, grep("^[0-9]", names(.)), factor_key = TRUE) %>% 
       mutate(wvlt = as.numeric(as.character(wvlt))) %>% 
@@ -1361,7 +1362,7 @@ plot_spectra <- function(data, col_in = "all", treatment = NULL,
     if(topdf){
       # save plot to pdf
       # individual spectra
-      levels = nrow(unique(pd["group"]))
+      levels = ifelse(!is.null(facets), nrow(unique(pd["group"])), 1)
       width = 10
       pdf(paste0(path_to_data, "Output/spectra_trt_", column,".pdf"), width = width, height = width * (levels/2))
       # pdf(paste0("C:/Users/anjonas/output/spectra_", column,".pdf"), width = width, height = width * (levels/2))

@@ -6,7 +6,7 @@ rm(list = ls())
 .libPaths("T:/R4UserLibs")
 
 list.of.packages <- c("tidyverse", "mvoutlier", "data.table", "prospectr", 
-                      "ggsci", "doParallel", "foreach", "furrr", "nls.mulstart",
+                      "ggsci", "doParallel", "foreach", "furrr", "nls.multstart",
                       "scam")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages, dependencies = TRUE, repos = 'https://stat.ethz.ch/CRAN/')
@@ -34,24 +34,37 @@ source(paste0(path_to_funcs, "spectra_proc.R"))
 # data <- load_spectra(dir = path_to_data, subdir = "renamed", format = "asd")
 # saveRDS(data, paste0(path_to_data, "alldat.rds"))
 
-# load design (as measurement meta data)
-design <- read_csv("Z:/Public/Jonas/003_ESWW/Design_20211001/final_design_gen_rev.csv") %>% 
-  dplyr::select(1:8, gen_name, dis_treat_new)
-
 # ============================================================================================================= -
 
 data <- readRDS(paste0(path_to_data, "alldat.rds"))
 
 spc_pp <- data %>%
-  preprocess_spc(average = 5, 
-                 bin = 12, 
+  preprocess_spc(data = ., 
+                 col_in = "rflt", 
+                 average = 5, 
+                 bin = 6, 
                  w = 21, p = 3,
                  trim = c(350, 375, 1350, 1475, 1781, 1990, 2400, 2500),
-                 new_col = F)
+                 new_col = T) %>% 
+  preprocess_spc(data = ., 
+                 col_in = "rflt", 
+                 average = 5, 
+                 w = 21, p = 3, m = 1, 
+                 trim = c(350, 375, 1350, 1475, 1781, 1990, 2400, 2500),
+                 new_col = T)
 
-# p <- plot_spectra(spc_pp, col_in = "rflt_p3w21m0_trim_bin6")
+
+p <- plot_spectra(data = spc_pp, 
+                  facets = NULL,
+                  treatment = NULL,
+                  col_in = "all",
+                  topdf = T)
 
 # ============================================================================================================= -
+
+# load design (as measurement meta data)
+design <- read_csv("Z:/Public/Jonas/003_ESWW/Design_20211001/final_design_gen_rev.csv") %>% 
+  dplyr::select(1:8, gen_name, dis_treat_new)
 
 # add design and drop the reference measurements
 spc_pp$plot_UID <- strsplit(spc_pp$meas_id, "_") %>% lapply("[[", 3) %>% unlist()
@@ -60,8 +73,11 @@ spc_pp <- spc_pp %>%
   dplyr::filter(!grepl("Ref", plot_UID))
 
 # plot spectra
-plot_spectra(spc_pp, facets = "meas_date", col_in = "rflt_p3w21m0_trim_bin12",
-             treatment = "dis_treat_new", mark_outliers = F,
+plot_spectra(data = spc_pp, 
+             facets = "meas_date", 
+             col_in = "all",
+             treatment = "dis_treat_new", 
+             mark_outliers = F,
              topdf = T)
 
 # ============================================================================================================= -
