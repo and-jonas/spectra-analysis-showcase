@@ -1,5 +1,7 @@
 
 # ============================================================================================================= -
+# Prepare workspace ----
+# ============================================================================================================= -
 
 rm(list = ls())
 
@@ -35,6 +37,8 @@ source(paste0(path_to_funcs, "spectra_proc.R"))
 # saveRDS(data, paste0(path_to_data, "alldat.rds"))
 
 # ============================================================================================================= -
+# Pre-process and plot spectra ----
+# ============================================================================================================= -
 
 data <- readRDS(paste0(path_to_data, "alldat.rds"))
 
@@ -61,6 +65,8 @@ p <- plot_spectra(data = spc_pp,
                   topdf = T)
 
 # ============================================================================================================= -
+# Add design ----
+# ============================================================================================================= -
 
 # load design (as measurement meta data)
 design <- read_csv("Z:/Public/Jonas/003_ESWW/Design_20211001/final_design_gen_rev.csv") %>% 
@@ -81,7 +87,8 @@ plot_spectra(data = spc_pp,
              topdf = T)
 
 # ============================================================================================================= -
-
+# Calculate SVI ----
+# ============================================================================================================= -
 data$plot_UID <- strsplit(data$meas_id, "_") %>% lapply("[[", 3) %>% unlist()
 
 spc_ref <- data %>% 
@@ -92,11 +99,12 @@ SVI <- spc_ref %>%
   preprocess_spc(average = 5, 
                  w = 21, p = 3, m = 0, 
                  new_col = F) %>% 
-  calculate_SVI(col_in = "rflt_p3w21m0") %>% 
-  scale_SVI(data = SVI, 
-            plotid = "plot_UID", 
-            treatid = "dis_treat_new", 
-            plot = F)
+  calculate_SVI(col_in = "rflt_p3w21m0")
+  
+SVI_ <- scale_SVI(data = SVI, 
+                  plotid = "plot_UID", 
+                  treatid = "dis_treat_new", 
+                  plot = F)
 
 saveRDS(SVI, paste0(path_to_data, "SVIdat.rds"))
 
@@ -116,10 +124,38 @@ svi <- c("NDVI_nb_ASD", "MCARI2", "FII", "NDWI1650", "mND705", "780_740",
 
 parameters <- get_svi_dynamics(data = SVI, 
                                svi = svi,
-                               method = c("pspl"),
+                               method = c("linear", "cgom", "pspl"),
                                timevar = "dafm", 
                                plot_dynamics = T)
 
 # ============================================================================================================= -
+# Process scorings ---- 
+# ============================================================================================================= -
 
+path_to_data = "Z:/Public/Jonas/Data/ESWW006/RefData/GLA/"
+SEN <- readRDS(paste0(path_to_data, "all_sen_dat.rds"))
+# load design (as measurement meta data)
+design <- read_csv("Z:/Public/Jonas/003_ESWW/Design_20211001/final_design_gen_rev.csv") %>% 
+  dplyr::select(1:8, gen_name, dis_treat_new)
 
+SEN <- SEN %>% 
+  right_join(design, ., by = "plot_UID")
+
+names(SEN)[12] <- c("SVI")
+ 
+SEN_ <- scale_SVI(data = SEN, 
+                  plotid = "plot_UID", 
+                  treatid = "dis_treat_new", 
+                  plot = F)
+
+svi <- c("Senescence_plot", "Senescence_Fl0")
+
+# subset <- SEN_ %>% filter(Plot_ID %in% c("ESWW0060082"))
+
+parameters <- get_svi_dynamics(data = SEN_, 
+                               svi = svi,
+                               method = c("linear", "cgom", "pspl"),
+                               timevar = "dafm", 
+                               plot_dynamics = T)
+
+# ============================================================================================================= -

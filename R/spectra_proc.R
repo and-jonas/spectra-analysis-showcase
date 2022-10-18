@@ -858,6 +858,7 @@ scale_SVI <- function(data, plotid, treatid,
   names(data)[colid] <- "Plot_ID"
   colid <- which(names(data)==treatid)
   names(data)[colid] <- "Treatment"
+  data$meas_date <- as.Date(data$meas_date, "%Y%m%d")
   
   # keep only plots with measurements covering the entire measurement period
   # get start and end date
@@ -865,7 +866,7 @@ scale_SVI <- function(data, plotid, treatid,
   max_date <- max(data$meas_date)
   # transform measurement date in days after first measurement
   # this should be replaced by a measure of chronological or thermal time after heading
-  data$dafm <- as.numeric(as.Date(data$meas_date, "%Y%m%d") - as.Date(min_date, "%Y%m%d"))
+  data$dafm <- as.numeric(data$meas_date - min_date)
   
   # extract SVI from list column and add required metadata
   meta <- data[c("Plot_ID", "meas_date", "dafm", "Treatment")]
@@ -873,12 +874,12 @@ scale_SVI <- function(data, plotid, treatid,
   d <- cbind(meta, SVI_dat)
   
   # filter dataset
-  d_ <- d %>% group_by(Plot_ID) %>% nest() %>% 
-    mutate(max = purrr::map_chr(data,  ~max(.$meas_date)),
-           min = purrr::map_chr(data,  ~min(.$meas_date))) %>% 
+  d_ <- d %>% group_by(Plot_ID) %>% nest() %>%
+    mutate(max = purrr::map_chr(data,  ~as.character(max(.$meas_date))),
+           min = purrr::map_chr(data,  ~as.character(min(.$meas_date)))) %>%
     filter(max == max_date & min == min_date)
   # remove helper columns
-  d_ <- d_[!(names(d_) %in% c("max", "min"))] 
+  d_ <- d_[!(names(d_) %in% c("max", "min"))]
   
   # scale SVI
   d_scaled <- d_ %>% 
@@ -1003,8 +1004,8 @@ get_svi_dynamics <- function(data,
     do(., data.frame(
       timevar = seq(min(.$timevar), max(.$timevar), length.out = 100),
       stringsAsFactors = FALSE)
-      )
-
+    )
+  
   # Fit Gompertz models
   if ("cgom" %in% method){
     
@@ -1038,13 +1039,13 @@ get_svi_dynamics <- function(data,
 
     # fit splines
     fits <-  fits %>%
-      mutate(fit_pspl = purrr::map(data, 
-                                   ~p_spline(.x, "timevar", "value")))
+      mutate(fit_pspl = purrr::map(.x = data, "timevar", "value", 
+                                   .f = possibly(p_spline, otherwise = NA_real_)))
     
     # make predictions
     fits <- fits %>% 
-      mutate(preds_pspl = purrr::map(fit_pspl,
-                                     ~predict_p_spline(., newdata = new_preds)))
+      mutate(preds_pspl = purrr::map(.x = fit_pspl, newdata = new_preds,
+                                     .f = possibly(predict_p_spline, otherwise = NA_real_)))
       
   }
   
@@ -1056,23 +1057,26 @@ get_svi_dynamics <- function(data,
   # Extract model parameters 
   # ============================================================================ -
   
+  print(" -- Extracting parameters ...")
+  
   mod_pars <- fits
   
-  if ("interpolation" %in% method){
+  if ("linear" %in% method){
     mod_pars <- mod_pars %>% 
-      mutate(pars_lin = purrr::map(preds_lin, extract_pars) %>% 
+      mutate(pars_lin = purrr::map(preds_lin, extract_pars, new_data = new_preds) %>% 
                purrr::map(cbind.data.frame))
   }
   if ("cgom" %in% method){
     mod_pars <- mod_pars %>%
       mutate(pars_cgom = purrr::map(fit_cgom, broom::tidy)) %>% 
       mutate(pars_cgom = purrr::map(pars_cgom, tidy_gompertz_output)) %>% 
-      mutate(pars2_cgom = purrr::map(preds_cgom, extract_pars) %>% 
+      mutate(pars2_cgom = purrr::map(preds_cgom, extract_pars, new_data = new_preds) %>% 
                purrr::map(cbind.data.frame))
   }
   if ("pspl" %in% method){
     mod_pars <- mod_pars %>%
-      mutate(pars_pspl = purrr::map(preds_pspl, extract_pars) %>% 
+      mutate(pars_pspl = purrr::map(.x = preds_pspl, new_data = new_preds,
+                                    .f = extract_pars) %>% 
                purrr::map(cbind.data.frame))
   }
   
@@ -1082,12 +1086,18 @@ get_svi_dynamics <- function(data,
   
   if (plot_dynamics){
     
-    print(" -- creating plots ...")
+    print(" -- Creating plots ...")
     
+    # remove plots with missing predictions
+    fits <- fits %>% 
+      mutate(preds_ = purrr::map_lgl(preds_pspl, is.data.frame)) %>% 
+      filter(preds_ == TRUE) %>% 
+      dplyr::select(-preds_)
+        
     # extract data
     preds <- fits[c("Plot_ID", "Treatment", "variable", "gen_name",
                   grep("preds_", colnames(fits), value = T))] %>% 
-      unnest(names_sep = "_")
+      unnest(cols = starts_with("preds_"))
     preds <- cbind(new_preds, preds) %>% as_tibble %>% 
       tidyr::pivot_longer(., cols = 6:ncol(.), 
                           names_to = "method", 
@@ -1205,7 +1215,9 @@ get_svi_dynamics <- function(data,
   
   # ============================================================================ -
   
-  return(list(fits, parameters))
+  out <- list("fits" = fits, "parameters" = parameters)
+  
+  return(out)
 
 }
 
@@ -1684,19 +1696,26 @@ predict_p_spline <- function(spl, newdata = new_preds) {
   
 }
 
-extract_pars <- function(data){
+extract_pars <- function(data, new_data){
   
-  # find method predictions column name
-  colid <- grep("^preds_", names(data), value = T)
-  # add the time frame of predictions
-  data <- bind_cols(data, new_preds)
+  # check if model could be fitted
+  if(is_tibble(data)){
+    # find method predictions column name
+    colid <- grep("^preds_", names(data), value = T)
+    # add the time frame of predictions
+    data <- bind_cols(data, new_data)
+    
+    # extract parameters
+    t80 <- data[which(data[[colid]] < 8)[1], "timevar"]$timevar
+    t50 <- data[which(data[[colid]] < 5)[1], "timevar"]$timevar
+    t20 <- data[which(data[[colid]] < 2)[1], "timevar"]$timevar
+    dur1 <- t50 - t80
+    dur2 <- t20 - t80
+  # if no model object exists, make parameters NA
+  } else{
+    t80 <- t50 <- t20 <- dur1 <- dur2 <- NA
+  }
   
-  # extract parameters
-  t80 <- data[which(data[[colid]] < 8)[1], "timevar"]$timevar
-  t50 <- data[which(data[[colid]] < 5)[1], "timevar"]$timevar
-  t20 <- data[which(data[[colid]] < 2)[1], "timevar"]$timevar
-  dur1 <- t50 - t80
-  dur2 <- t20 - t80
   pars <- cbind(t80, t50, t20, dur1, dur2)
   
   return(pars)
