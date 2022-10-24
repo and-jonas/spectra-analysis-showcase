@@ -150,12 +150,13 @@ SEN_ <- scale_SVI(data = SEN,
 
 svi <- c("Senescence_plot", "Senescence_Fl0")
 
-# subset <- SEN_ %>% filter(Plot_ID %in% c("ESWW0060082"))
+# subset <- SEN_ %>% filter(Plot_ID %in% c("ESWW0060146"))
 
 parameters <- get_svi_dynamics(data = SEN_, 
                                svi = svi,
-                               method = c("linear", "cgom", "pspl"),
+                               method = c("linear", "cgom", "fgom", "pspl"),
                                timevar = "dafm", 
                                plot_dynamics = T)
 
 # ============================================================================================================= -
+

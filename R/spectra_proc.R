@@ -940,7 +940,6 @@ scale_SVI <- function(data, plotid, treatid,
 #' @param data A tibble with scaled SVI values in a list column of data.tables, as returned by "scale_SVI"
 #' @param timevar A character string specifying the name of the column containing the time variable
 #' @param method A character string specifying the method to be used for modelling of the temporal index dynamics. 
-#' So far, only "interpolate" is supported.
 #' @param plot Boolean, indicating whether or not to create a plot
 #' @param topdf Boolean, indicating whether or not to save the plot to pdf
 #' @return A tibble containing the dynamics parameters for each Plot and SVI. 
@@ -1029,7 +1028,33 @@ get_svi_dynamics <- function(data,
     # get predictions
     fits <- fits %>%
       mutate(preds_cgom = purrr::map(fit_cgom, broom::augment, newdata = new_preds)) %>% 
-      mutate(preds_cgom = purrr::map(preds_cgom, tidy_gompertz_preds))
+      mutate(preds_cgom = purrr::map(preds_cgom, tidy_gompertz_preds, method = "cgom"))
+  }
+  
+  # Fit Gompertz models
+  if ("fgom" %in% method){
+    
+    print(" -- Fitting flexible Gompertz ...")
+    
+    # fit Gompertz models
+    fits <- fits %>% 
+      mutate(fit_fgom = purrr::map(data,
+                                   ~ nls_multstart(value ~ Gompertz_flex(A, C, b, M, tempsum = timevar),
+                                                   data = .x, 
+                                                   iter = 750, 
+                                                   start_lower = c(A = -1000, C = 5, b = -0.2, M = 15),
+                                                   start_upper = c(A = 1000, C = 10000, b = 0.1, M = 25),
+                                                   convergence_count = 150, 
+                                                   supp_errors = "Y")))
+    
+    # max and min for each curve
+    max_min <- group_by(dat, Plot_ID) %>%
+      summarise(., min_gGDDAH = min(timevar), max_gGDDAH = max(timevar)) %>%
+      ungroup()
+    # get predictions
+    fits <- fits %>%
+      mutate(preds_fgom = purrr::map(fit_fgom, broom::augment, newdata = new_preds)) %>% 
+      mutate(preds_fgom = purrr::map(preds_fgom, tidy_gompertz_preds, method = "fgom"))
   }
   
   # Fit p-splines
@@ -1073,6 +1098,13 @@ get_svi_dynamics <- function(data,
       mutate(pars2_cgom = purrr::map(preds_cgom, extract_pars, new_data = new_preds) %>% 
                purrr::map(cbind.data.frame))
   }
+  if ("fgom" %in% method){
+    mod_pars <- mod_pars %>%
+      mutate(pars_fgom = purrr::map(fit_fgom, broom::tidy)) %>% 
+      mutate(pars_fgom = purrr::map(pars_fgom, tidy_gompertz_output)) %>% 
+      mutate(pars2_fgom = purrr::map(preds_fgom, extract_pars, new_data = new_preds) %>% 
+               purrr::map(cbind.data.frame))
+  }
   if ("pspl" %in% method){
     mod_pars <- mod_pars %>%
       mutate(pars_pspl = purrr::map(.x = preds_pspl, new_data = new_preds,
@@ -1106,8 +1138,8 @@ get_svi_dynamics <- function(data,
 
     # basic plot layout
     p0 <- ggplot() +
-      scale_colour_manual(values = c("green4", "black", "red")) +
-      scale_fill_manual(values = c("green4", "black", "red")) +
+      scale_colour_manual(values = c("green4", "yellow", "black", "red")) +
+      scale_fill_manual(values = c("green4", "yellow", "black", "red")) +
       scale_y_continuous(breaks = seq(0,10,2), limits = c(-.5, 10.5)) +
       geom_abline(slope = 0, intercept = 8.5) +
       geom_abline(slope = 0, intercept = 5.0) +
@@ -1670,8 +1702,15 @@ lin_approx <- function(data){
   return(preds)
 }
 
+# Constrained Gompertz equation
 Gompertz_constrained <- function(b, M, tempsum) {
   grenness_decay <- 10*exp(-exp(-b*(tempsum-M)))
+  return(grenness_decay)
+}
+
+# Flexible Gompertz equation
+Gompertz_flex <- function(A, C, b, M, tempsum) {
+  grenness_decay <- A + C*exp(-exp(-b*(tempsum-M)))
   return(grenness_decay)
 }
 
@@ -1679,7 +1718,7 @@ p_spline <- function(data, x_name, y_name) {
 
   y <- data[[y_name]]
   x <- data[[x_name]]
-  spl <- scam(y ~ s(x, k = round(length(x) * 3/4), bs = "mpd"),
+  spl <- scam(y ~ s(x, k = round(length(x) * 0.8), bs = "mpd"),
               optimizer = "bfgs")
        
   return(spl)
@@ -1722,9 +1761,10 @@ extract_pars <- function(data, new_data){
   
 }
 
-tidy_gompertz_preds <- function(data){
+tidy_gompertz_preds <- function(data, method){
   
-  out <- tibble(preds_cgom = data$.fitted)
+  out <- tibble(preds = data$.fitted)
+  names(out)[1] <- paste0("preds_", method)
   
   return(out)
 }
