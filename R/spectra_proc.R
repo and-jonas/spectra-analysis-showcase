@@ -1121,10 +1121,12 @@ get_svi_dynamics <- function(data,
     print(" -- Creating plots ...")
     
     # remove plots with missing predictions
-    fits <- fits %>% 
-      mutate(preds_ = purrr::map_lgl(preds_pspl, is.data.frame)) %>% 
-      filter(preds_ == TRUE) %>% 
-      dplyr::select(-preds_)
+    if("preds_pspl" %in% names(fits)){
+      fits <- fits %>% 
+        mutate(preds_ = purrr::map_lgl(preds_pspl, is.data.frame)) %>% 
+        filter(preds_ == TRUE) %>% 
+        dplyr::select(-preds_)
+    }
         
     # extract data
     preds <- fits[c("Plot_ID", "Treatment", "variable", "gen_name",
@@ -1148,6 +1150,27 @@ get_svi_dynamics <- function(data,
       theme(panel.grid = element_blank()) +
       ylab("Index value") +
       xlab(timevar)
+    
+    # treatment-wise plots ====================================================== -
+    
+    # empty lists for plots
+    mets_list = list()
+    
+    # loop over interpolation methods
+    for (met in unique(preds$method)){
+      
+      plot_id <- paste(met)
+      
+      pd <- preds[preds$method == met,]
+      pd <- pd[pd$Treatment %in% c("F0I", "FI"),]
+    
+      mets_list[[met]] <- p0 +
+        geom_line(aes(timevar, prediction, group = interaction(Treatment, Plot_ID), colour = Treatment),
+                  alpha = 0.75, pd) +
+        scale_colour_manual(values = c("green4", "black")) +
+        facet_wrap(~variable) +
+        ggtitle(plot_id)
+    }
     
     # genotype-wise plots ====================================================== -
     
@@ -1196,6 +1219,11 @@ get_svi_dynamics <- function(data,
     } # end genotype loop
     
     # save plots to pdf 
+    pdf(paste0(path_to_data, "Output/dynamics/treats.pdf"), width = 15, height = 12)
+    for (i in 1:length(mets_list)){
+      plot(mets_list[[i]])
+    }
+    dev.off()
     pdf(paste0(path_to_data, "Output/dynamics/gen_reps.pdf"), width = 15, height = 12)
     for (i in 1:length(reps_list)){
       plot(reps_list[[i]])
@@ -1253,6 +1281,81 @@ get_svi_dynamics <- function(data,
 
 }
 
+# extract spectral index sensitivity indicators
+extract_sensitivity_indicators <- function(fits, parameters){
+  
+  # get prediction position
+  min <- min(fits$data[[1]]$timevar)
+  max <- max(fits$data[[1]]$timevar)
+  newdata <- seq(min, max, length.out = 100)
+  
+  # ============================================================================ -
+  # (1) area between curves
+  # ============================================================================ -
+  
+  # RESHAPE DATA
+  predictions <- fits %>% 
+    dplyr::select(1:4, starts_with("preds")) %>% 
+    unnest(starts_with("preds"))
+  # get a vector with time points for which a prediction was obtained
+  newdat <- rep(unlist(unname(new_preds)), nrow(predictions)/length(newdata))
+  # add to data
+  predictions <- bind_cols(predictions, "timevar" = newdat) %>% 
+    dplyr::select(1:4, "timevar", everything())
+  names(predictions) <- gsub("preds_", "", names(predictions))
+  predictions <- pivot_longer(predictions, cols = 6:7, names_to = "method")
+  
+  # GET MEANS ACROSS TREATMENTS
+  treatment_means <- predictions %>% 
+    group_by(Treatment, gen_name, variable, method, timevar) %>% 
+    summarize(mean_pred = mean(value)) 
+  means <- treatment_means %>% 
+    pivot_wider(names_from = Treatment, values_from = mean_pred) %>% 
+    dplyr::select(variable, timevar, F0I, FI)
+
+  # CALCULATE THE AREA BETWEEN CURVES OF TREATMENTS
+  # for each genotype, index, and interpolation method
+  means$helper <- paste(means$gen_name, means$variable, means$method, sep = "_")
+  lst <- split(means, means$helper)
+  df <- list()
+  for (n in names(lst)){
+    d <- lst[[n]]
+    # helper functions
+    f1 <- approxfun(d$timevar, d$F0I-d$FI)   
+    f2 <- function(x) abs(f1(x))
+    # extract the difference between the curves
+    diff <- approx(d$timevar, d$F0I-d$FI)$y
+    # get the integral of the difference curve
+    Integral <- integrate(f2, min(d$timevar), max(d$timevar), 
+                          subdivisions = 2000)$value
+    # assemble output
+    ids <- strsplit(n, "_SI_") %>% unlist()
+    ids2 <- strsplit(ids, "_") %>% unlist()
+    si_id <- paste(ids2[3:length(ids2)-1], collapse = "_")
+    df[[n]] <- tibble("gen_name" = ids[1], "SI" = si_id, 
+                      "method" = ids2[length(ids2)],
+                      "Integral" = Integral, 
+                      "difference" = list(diff))
+  }
+  integral <- bind_rows(df)
+  
+  # ============================================================================ -
+  # (2) differences between parameter values
+  # ============================================================================ -
+
+  p_diffs <- parameters %>% 
+    pivot_longer(5:length(.), names_to = "par") %>% 
+    group_by(Treatment, gen_name, variable, par) %>% 
+    summarize(mean = mean(value)) %>% 
+    pivot_wider(names_from = Treatment, values_from = mean) %>% 
+    dplyr::select(variable, par, F0I, FI) %>% 
+    mutate(diff = F0I - FI)
+  
+  out <- list(integral, p_diffs)
+  
+  }
+
+
 # in progress
 plot_parameters <- function(data){
   
@@ -1267,9 +1370,7 @@ plot_parameters <- function(data){
     facet_wrap(~interaction(parameter, method), scales = "free") +
     theme_bw(base_family = "Helvetica") +
     theme(panel.grid = element_blank()) +
-    ylab("Index value") +
-    xlab(timevar)
-  
+    ylab("Index value")
 }
 
 #' Plots reflectance spectra and pre-processing products
@@ -1760,6 +1861,11 @@ extract_pars <- function(data, new_data){
   return(pars)
   
 }
+
+
+
+
+
 
 tidy_gompertz_preds <- function(data, method){
   

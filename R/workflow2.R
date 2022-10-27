@@ -42,6 +42,13 @@ source(paste0(path_to_funcs, "spectra_proc.R"))
 
 data <- readRDS(paste0(path_to_data, "alldat.rds"))
 
+# remove data from plots with blue background 
+p <- read_csv("Z:/Public/Jonas/Data/ESWW006/ImagesNadir/Meta/images_exclude.csv")
+pdates <- strsplit(p$Exclude, "_") %>% lapply("[[", 1) %>% unlist() %>% unique()
+pplots <- strsplit(p$Exclude, "_") %>% lapply("[[", 3) %>% unlist() %>% unique()
+data <- data %>% 
+  dplyr::filter(!(meas_date %in% pdates & Plot_ID %in% pplots))
+
 spc_pp <- data %>%
   preprocess_spc(data = ., 
                  col_in = "rflt", 
@@ -89,6 +96,7 @@ plot_spectra(data = spc_pp,
 # ============================================================================================================= -
 # Calculate SVI ----
 # ============================================================================================================= -
+
 data$plot_UID <- strsplit(data$meas_id, "_") %>% lapply("[[", 3) %>% unlist()
 
 spc_ref <- data %>% 
@@ -116,17 +124,36 @@ plot_SVI(SVI,
          groups = "Treatment")
 
 # ============================================================================================================= -
+# Process spectra ----
+# ============================================================================================================= -
 
 SVI <- readRDS(paste0(path_to_data, "SVIdat.rds"))
 
-svi <- c("NDVI_nb_ASD", "MCARI2", "FII", "NDWI1650", "mND705", "780_740",
-         "PSRI", "CARG", "PRI$", "WI_NDVI")
+SVI_ <- scale_SVI(data = SVI, 
+                  plotid = "plot_UID", 
+                  treatid = "dis_treat_new", 
+                  plot = F)
 
-parameters <- get_svi_dynamics(data = SVI, 
+# svi <- c("NDVI_nb_ASD", "MCARI2", "FII", "NDWI1650", "mND705", "780_740",
+#          "PSRI", "CARG", "PRI$", "WI_NDVI")
+
+svi <- names(SVI_$SVI[[1]])
+
+parameters <- get_svi_dynamics(data = SVI_, 
                                svi = svi,
-                               method = c("linear", "cgom", "pspl"),
+                               method = c("cgom", "pspl"),
                                timevar = "dafm", 
-                               plot_dynamics = T)
+                               plot_dynamics = F)
+
+saveRDS(parameters, paste0(path_to_data, "PARdat.rds"))
+
+fits <- parameters$fits
+parameters <- parameters$parameters
+
+indis <- extract_sensitivity_indicators(fits, parameters)
+
+integrals <- indis[[1]]
+differences <- indis[[2]]
 
 # ============================================================================================================= -
 # Process scorings ---- 
@@ -157,6 +184,8 @@ parameters <- get_svi_dynamics(data = SEN_,
                                method = c("linear", "cgom", "fgom", "pspl"),
                                timevar = "dafm", 
                                plot_dynamics = T)
+
+plot_parameters(data = parameters$parameters)
 
 # ============================================================================================================= -
 
